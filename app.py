@@ -181,6 +181,8 @@ if selected_option == "+ Crear Nuevo Caso":
             st.error("El código de caso es obligatorio.")
         elif normalized_case_id in st.session_state.cases:
             st.error("Ya existe un caso con ese código.")
+        elif bool(new_cex_exchange.strip()) != bool(new_cex_address.strip()):
+            st.error("Indica tanto el exchange como su dirección CEX.")
         else:
             wallets = {
                 f"WALLET_{index}": address.strip()
@@ -231,8 +233,12 @@ else:
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("📥 Cargar Expediente Completo"):
-            st.success(f"Expediente del caso {selected_option} cargado correctamente.")
+        if st.button("💾 Guardar expediente"):
+            try:
+                save_cases_to_json(CASES_FILE, st.session_state.cases)
+                st.success(f"Expediente guardado en {CASES_FILE}.")
+            except OSError as error:
+                st.error(f"No se pudo guardar el expediente: {error}")
     with col_btn2:
         if st.button("🧪 Probar Alerta Telegram"):
             message = (

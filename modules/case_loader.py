@@ -26,11 +26,8 @@ def save_cases_to_json(file_path: str | Path, cases: Dict[str, Dict[str, Any]]) 
     path = Path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(cases, handle, ensure_ascii=False, indent=2)
-    except OSError:
-        raise
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(cases, handle, ensure_ascii=False, indent=2)
 
 
 def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
