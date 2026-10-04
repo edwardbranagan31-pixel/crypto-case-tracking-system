@@ -3,11 +3,16 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
-import graphviz
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
+from modules.alert_history import add_alert_history, get_case_alerts
+from modules.case_loader import load_cases_from_json, save_cases_to_json
+from modules.graph_visualizer import build_case_graph
 from modules.onchain import check_case_addresses
+from modules.neo4j_integration import sync_case_to_neo4j
+from modules.risk_scoring import compute_risk_score, get_risk_label
+from modules.search_engine import search_all
 
 # -----------------------------------------------------------------------------
 # CARGA DE VARIABLES DE ENTORNO
@@ -33,6 +38,7 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+CASES_FILE = os.getenv("CASES_FILE", "cases.json")
 
 # -----------------------------------------------------------------------------
 # CONEXIÓN A NEO4J
@@ -75,7 +81,7 @@ def send_telegram_alert(message):
 # CASOS PREDETERMINADOS
 # -----------------------------------------------------------------------------
 if "cases" not in st.session_state:
-    st.session_state.cases = {
+    st.session_state.cases = load_cases_from_json(CASES_FILE) or {
         "NC-JOHNSTON-2024-3912": {
             "title": "Caso #2024-3912 (Edward Branagan - CLF Coin)",
             "victim": "Edward Andres Branagan",
@@ -122,6 +128,18 @@ st.sidebar.markdown("---")
 
 case_options = list(st.session_state.cases.keys()) + ["+ Crear Nuevo Caso"]
 selected_option = st.sidebar.selectbox("📂 Seleccionar Expediente:", case_options)
+search_query = st.sidebar.text_input("🔎 Buscar casos, wallets o exchanges")
+if search_query.strip():
+    matches = search_all(st.session_state.cases, search_query)
+    if matches:
+        st.sidebar.caption("Resultados")
+        for match in matches:
+            st.sidebar.write(
+                f"**{match['case_id']}** · {match.get('title', '')} "
+                f"({match['match_type']})"
+            )
+    else:
+        st.sidebar.caption("No se encontraron coincidencias.")
 
 st.sidebar.markdown("### 📡 Estado del Sistema")
 neo4j_driver = get_neo4j_driver()
@@ -148,38 +166,67 @@ if selected_option == "+ Crear Nuevo Caso":
 
         with col2:
             new_loss = st.number_input("Pérdida Total Estimada ($ USD)", value=50000.0, step=1000.0)
-            new_btc_wallet = st.text_input("Dirección de Depósito BTC", value="")
-            new_eth_wallet = st.text_input("Dirección de Depósito ETH/USDT", value="")
+            new_wallets_text = st.text_area(
+                "Direcciones de wallets (una por línea; cualquier red soportada)",
+                value="",
+            )
+            new_cex_exchange = st.text_input("Exchange CEX (opcional)", value="")
+            new_cex_address = st.text_input("Dirección CEX (opcional)", value="")
 
         submit_case = st.form_submit_button("🚀 Registrar Caso en el Sistema")
 
     if submit_case:
-        st.session_state.cases[new_case_id] = {
-            "title": f"Caso {new_case_id} ({new_victim} - {new_platform})",
-            "victim": new_victim,
-            "police_report": new_case_id,
-            "total_loss_usd": new_loss,
-            "traced_usd": 0.0,
-            "fiat_wire": {
-                "amount": "$0.00",
-                "bank": "N/A",
-                "beneficiary": "N/A",
-                "receiving_bank": "N/A",
-                "date": "N/A",
-            },
-            "wallets": {
-                "BTC_DEPOSIT": new_btc_wallet,
-                "ETH_USDT_DEPOSIT": new_eth_wallet,
-            },
-            "cex_endpoints": [],
-        }
-        st.success(f"Caso {new_case_id} registrado exitosamente. Selecciónalo en la barra lateral.")
-        st.rerun()
+        normalized_case_id = new_case_id.strip()
+        if not normalized_case_id:
+            st.error("El código de caso es obligatorio.")
+        elif normalized_case_id in st.session_state.cases:
+            st.error("Ya existe un caso con ese código.")
+        else:
+            wallets = {
+                f"WALLET_{index}": address.strip()
+                for index, address in enumerate(new_wallets_text.splitlines(), start=1)
+                if address.strip()
+            }
+            cex_endpoints = []
+            if new_cex_exchange.strip() and new_cex_address.strip():
+                cex_endpoints.append(
+                    {
+                        "exchange": new_cex_exchange.strip(),
+                        "address": new_cex_address.strip(),
+                        "type": "Address",
+                    }
+                )
+            st.session_state.cases[normalized_case_id] = {
+                "title": f"Caso {normalized_case_id} ({new_victim} - {new_platform})",
+                "victim": new_victim,
+                "police_report": normalized_case_id,
+                "total_loss_usd": new_loss,
+                "traced_usd": 0.0,
+                "fiat_wire": {
+                    "amount": "$0.00",
+                    "bank": "N/A",
+                    "beneficiary": "N/A",
+                    "receiving_bank": "N/A",
+                    "date": "N/A",
+                },
+                "wallets": wallets,
+                "cex_endpoints": cex_endpoints,
+            }
+            try:
+                save_cases_to_json(CASES_FILE, st.session_state.cases)
+            except OSError as error:
+                st.error(f"Caso creado en esta sesión, pero no pudo guardarse: {error}")
+            st.success(
+                f"Caso {normalized_case_id} registrado. Selecciónalo en la barra lateral."
+            )
+            st.rerun()
 
 else:
     case_data = st.session_state.cases[selected_option]
     st.title(f"🔍 {case_data['title']}")
     st.caption(f"Víctima: {case_data['victim']} | Referencia Policial: {case_data['police_report']}")
+    risk_score = compute_risk_score(case_data)
+    st.metric("Riesgo del caso", f"{get_risk_label(risk_score)} · {risk_score}/100")
 
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
@@ -200,6 +247,13 @@ else:
                 st.success(msg)
             else:
                 st.error(msg)
+
+    if neo4j_driver and st.button("🔄 Sincronizar caso con Neo4j"):
+        sync_result = sync_case_to_neo4j(neo4j_driver, selected_option, case_data)
+        if sync_result["status"] == "ok":
+            st.success(sync_result["message"])
+        else:
+            st.error(sync_result.get("message", sync_result.get("reason", "Sync failed")))
 
     # Métricas
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -239,7 +293,8 @@ else:
         st.markdown("---")
         st.subheader("⛓️ Consulta on-chain en vivo")
         st.caption(
-            "Consulta balances nativos e historial reciente de Bitcoin y Ethereum. "
+            "Consulta balances nativos e historial reciente en Bitcoin, Litecoin, Ethereum, "
+            "BNB Smart Chain, Polygon, Solana, XRP Ledger y TRON. "
             "Requiere conexión a exploradores públicos."
         )
         addresses_fingerprint = (
@@ -306,31 +361,8 @@ else:
 
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
-        st.markdown("Visualización de la ruta seguida por los activos desde el origen hasta los exchanges regulados.")
-
-        graph = graphviz.Digraph(format="svg")
-        graph.attr(rankdir="LR", size="8,5")
-
-        graph.node("V", f"Víctima:\n{case_data['victim']}", shape="ellipse", color="blue")
-        graph.node("S", "Plataforma Scam\n(CLF Coin App)", shape="box", color="red")
-        graph.node("I", "Billeteras Intermediarias\n(Layer 1)", shape="box", color="orange")
-        graph.node("A", "Agregación Central\n(Commingling Wallet)", shape="box", color="purple")
-
-        graph.edge("V", "S", label="Depósito")
-        graph.edge("S", "I", label="Split / Peel Chain")
-        graph.edge("I", "A", label="Consolidación")
-
-        for idx, endpoint in enumerate(case_data["cex_endpoints"]):
-            node_id = f"CEX_{idx}"
-            graph.node(
-                node_id,
-                f"Exchange Destino:\n{endpoint['exchange']}\n({endpoint['address'][:8]}...)",
-                shape="doubleoctagon",
-                color="green",
-            )
-            graph.edge("A", node_id, label="Dispersión Final")
-
-        st.graphviz_chart(graph)
+        st.caption("Diagrama de wallets y endpoints registrados; no representa transacciones verificadas.")
+        st.graphviz_chart(build_case_graph(case_data))
 
     with tab3:
         st.subheader("🔔 Sistema Móvil de Alertas Vía Telegram")
@@ -342,8 +374,9 @@ else:
                 f"🚨 *ALERTA DE DETECCIÓN CEX - {selected_option}*\n\n"
                 f"• *Víctima:* {case_data['victim']}\n"
                 f"• *Monto Trazado:* ${case_data['traced_usd']:,.2f} USD\n"
-                f"• *CEX Identificados:* Binance, OKX, Coinbase\n"
-                f"• *Estado:* Requerimiento de Preservación Listo.\n\n"
+                f"• *CEX Identificados:* "
+                f"{', '.join(endpoint.get('exchange', 'Unknown') for endpoint in case_data['cex_endpoints']) or 'Sin datos'}\n"
+                f"• *Estado:* Expediente disponible para revisión.\n\n"
                 f"📍 *Acción:* Revisar expediente en el panel."
             ),
         )
@@ -351,9 +384,18 @@ else:
         if st.button("📲 Transmitir Alerta Instantánea al Celular"):
             success, msg = send_telegram_alert(alert_text)
             if success:
+                add_alert_history(selected_option, alert_text)
                 st.success(msg)
             else:
                 st.error(msg)
+
+        st.markdown("#### Historial de alertas")
+        case_alerts = get_case_alerts(selected_option)
+        if case_alerts:
+            for alert in case_alerts:
+                st.caption(f"{alert['timestamp']} · {alert['message']}")
+        else:
+            st.info("Aún no hay alertas enviadas para este caso en esta sesión.")
 
     with tab4:
         st.subheader("📄 Generador de Expediente Técnico Normalizado")
