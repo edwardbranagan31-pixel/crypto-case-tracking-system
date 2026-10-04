@@ -68,6 +68,12 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8080
 - Genera un grafo visual de flujo de fondos
 - Permite enviar alertas a Telegram
 - Exporta el expediente técnico en JSON
+- Consulta balances nativos y transacciones recientes de direcciones Bitcoin y Ethereum
+
+La consulta on-chain usa los exploradores públicos mempool.space y Blockscout, sin
+requerir API keys. Está limitada a Bitcoin mainnet y Ethereum mainnet, puede estar
+sujeta a límites de solicitudes y muestra datos del explorador en el momento de
+la consulta; los tokens ERC-20 no se incluyen en el balance.
 
 ## Estructura del proyecto
 
