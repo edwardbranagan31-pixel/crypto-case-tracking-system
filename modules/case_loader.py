@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from modules.currency_utils import _to_float
+
 
 def load_cases_from_json(file_path: str | Path) -> Dict[str, Dict[str, Any]]:
     """Carga múltiples casos desde archivo JSON."""
@@ -38,8 +40,8 @@ def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
         "title": case_data.get("title", case_id),
         "victim": case_data.get("victim", "Unknown"),
         "police_report": case_data.get("police_report", case_id),
-        "total_loss_usd": float(case_data.get("total_loss_usd", 0.0)),
-        "traced_usd": float(case_data.get("traced_usd", 0.0)),
+        "total_loss_usd": _to_float(case_data.get("total_loss_usd", 0.0)),
+        "traced_usd": _to_float(case_data.get("traced_usd", 0.0)),
         "wallets": case_data.get("wallets", {}),
         "cex_endpoints": case_data.get("cex_endpoints", []),
         "fiat_wire": case_data.get("fiat_wire", {}),

@@ -6,6 +6,8 @@ import streamlit as st
 import graphviz
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
+from modules import auth_sidebar_status, is_auth_enabled, require_login
+from modules.onchain import check_case_addresses
 
 # -----------------------------------------------------------------------------
 # CARGA DE VARIABLES DE ENTORNO
@@ -18,6 +20,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+if is_auth_enabled():
+    require_login()
+    auth_sidebar_status()
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -229,6 +235,74 @@ else:
             st.dataframe(df_cex, use_container_width=True)
         else:
             st.info("Aún no se han registrado endpoints CEX para este caso.")
+
+        st.markdown("---")
+        st.subheader("⛓️ Consulta on-chain en vivo")
+        st.caption(
+            "Consulta balances nativos e historial reciente de Bitcoin y Ethereum. "
+            "Requiere conexión a exploradores públicos."
+        )
+        addresses_fingerprint = (
+            tuple(sorted((case_data.get("wallets") or {}).items())),
+            tuple(
+                sorted(
+                    (
+                        endpoint.get("exchange", ""),
+                        endpoint.get("address", ""),
+                    )
+                    for endpoint in case_data.get("cex_endpoints", [])
+                    if isinstance(endpoint, dict)
+                )
+            ),
+        )
+        saved_check = st.session_state.get("onchain_check", {})
+        if st.button("🔄 Consultar todas las direcciones", key="check_onchain"):
+            with st.spinner("Consultando exploradores de bloques..."):
+                results = check_case_addresses(
+                    case_data.get("wallets", {}),
+                    case_data.get("cex_endpoints", []),
+                )
+            saved_check = {
+                "case_id": selected_option,
+                "fingerprint": addresses_fingerprint,
+                "results": results,
+            }
+            st.session_state["onchain_check"] = saved_check
+
+        if (
+            saved_check.get("case_id") == selected_option
+            and saved_check.get("fingerprint") == addresses_fingerprint
+        ):
+            for result in saved_check["results"]:
+                heading = f"{result['label']} — {result['address']}"
+                with st.expander(heading, expanded=True):
+                    if result["status"] != "ok":
+                        st.warning(result.get("error", "Address could not be checked."))
+                        continue
+                    st.metric(
+                        f"Current balance ({result['network']})", result["balance"]
+                    )
+                    st.caption(
+                        f"On-chain transactions: {result['transaction_count']} · "
+                        f"[Open in explorer]({result['explorer']})"
+                    )
+                    if result["transactions"]:
+                        st.dataframe(
+                            pd.DataFrame(result["transactions"]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("No transactions returned by the explorer.")
+                    if result.get("tokens"):
+                        st.markdown("**Token balances**")
+                        st.dataframe(
+                            pd.DataFrame(result["tokens"]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+        elif not case_data.get("wallets") and not case_data.get("cex_endpoints"):
+            st.info("No wallet or CEX addresses are registered for this case.")
 
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")

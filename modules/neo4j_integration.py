@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from modules.currency_utils import _to_float
+
 
 def get_neo4j_driver(uri: str, user: str, password: str):
     """Crea conexión a Neo4j AuraDB."""
@@ -36,8 +38,8 @@ def sync_case_to_neo4j(driver: Optional[Any], case_id: str, case_data: Dict[str,
                 title=case_data.get("title", case_id),
                 victim=case_data.get("victim", "Unknown"),
                 police_report=case_data.get("police_report", case_id),
-                total_loss_usd=float(case_data.get("total_loss_usd", 0.0) or 0.0),
-                traced_usd=float(case_data.get("traced_usd", 0.0) or 0.0),
+                total_loss_usd=_to_float(case_data.get("total_loss_usd", 0.0)),
+                traced_usd=_to_float(case_data.get("traced_usd", 0.0)),
             )
 
             # Crear nodos Wallet y relaciones TRACKS
