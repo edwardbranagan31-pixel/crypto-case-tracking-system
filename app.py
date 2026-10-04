@@ -3,14 +3,20 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
-from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
 from modules.alert_history import add_alert_history, get_case_alerts
-from modules.case_loader import load_cases_from_json, save_cases_to_json
+from modules.case_loader import (
+    load_cases_from_json,
+    save_cases_to_json,
+    validate_case_id,
+)
 from modules.graph_visualizer import build_case_graph
+from modules.neo4j_integration import (
+    get_neo4j_driver as create_neo4j_driver,
+    sync_case_to_neo4j,
+)
 from modules.onchain import check_case_addresses
-from modules.neo4j_integration import sync_case_to_neo4j
 from modules.risk_scoring import compute_risk_score, get_risk_label
 from modules.search_engine import search_all
 
@@ -38,22 +44,9 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-CASES_FILE = os.getenv("CASES_FILE", "cases.json")
-
-# -----------------------------------------------------------------------------
-# CONEXIÓN A NEO4J
-# -----------------------------------------------------------------------------
-def get_neo4j_driver():
-    if NEO4J_URI and NEO4J_PASSWORD:
-        try:
-            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-            driver.verify_connectivity()
-            return driver
-        except Exception as e:
-            st.sidebar.warning(f"Neo4j no conectado: {e}")
-            return None
-    return None
-
+CASES_FILE = os.getenv(
+    "CASES_FILE", os.path.join(os.path.dirname(__file__), "cases.json")
+)
 
 # -----------------------------------------------------------------------------
 # TELEGRAM
@@ -142,7 +135,11 @@ if search_query.strip():
         st.sidebar.caption("No se encontraron coincidencias.")
 
 st.sidebar.markdown("### 📡 Estado del Sistema")
-neo4j_driver = get_neo4j_driver()
+neo4j_driver = None
+if NEO4J_URI and NEO4J_PASSWORD:
+    neo4j_driver = create_neo4j_driver(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+    if neo4j_driver is None:
+        st.sidebar.warning("Neo4j no conectado.")
 neo4j_status = "🟢 Conectado" if neo4j_driver else "🟡 Modo Local / Sin Neo4j"
 telegram_status = "🟢 Configurado" if (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID) else "🔴 Sin Credenciales"
 
@@ -177,10 +174,9 @@ if selected_option == "+ Crear Nuevo Caso":
 
     if submit_case:
         normalized_case_id = new_case_id.strip()
-        if not normalized_case_id:
-            st.error("El código de caso es obligatorio.")
-        elif normalized_case_id in st.session_state.cases:
-            st.error("Ya existe un caso con ese código.")
+        case_id_error = validate_case_id(normalized_case_id, st.session_state.cases)
+        if case_id_error:
+            st.error(case_id_error)
         elif bool(new_cex_exchange.strip()) != bool(new_cex_address.strip()):
             st.error("Indica tanto el exchange como su dirección CEX.")
         else:
@@ -198,7 +194,7 @@ if selected_option == "+ Crear Nuevo Caso":
                         "type": "Address",
                     }
                 )
-            st.session_state.cases[normalized_case_id] = {
+            new_case = {
                 "title": f"Caso {normalized_case_id} ({new_victim} - {new_platform})",
                 "victim": new_victim,
                 "police_report": normalized_case_id,
@@ -214,31 +210,45 @@ if selected_option == "+ Crear Nuevo Caso":
                 "wallets": wallets,
                 "cex_endpoints": cex_endpoints,
             }
-            try:
-                save_cases_to_json(CASES_FILE, st.session_state.cases)
-            except OSError as error:
-                st.error(f"Caso creado en esta sesión, pero no pudo guardarse: {error}")
-            st.success(
-                f"Caso {normalized_case_id} registrado. Selecciónalo en la barra lateral."
-            )
-            st.rerun()
+            st.session_state.cases[normalized_case_id] = new_case
+            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+            if neo4j_driver:
+                sync_result = sync_case_to_neo4j(
+                    neo4j_driver, normalized_case_id, new_case
+                )
+                if sync_result["status"] != "ok":
+                    st.warning(
+                        sync_result.get(
+                            "message", "No se pudo sincronizar el caso a Neo4j."
+                        )
+                    )
+            if saved:
+                st.success(
+                    f"Caso {normalized_case_id} registrado. "
+                    "Selecciónalo en la barra lateral."
+                )
+                st.rerun()
+            else:
+                st.error(
+                    f"El caso {normalized_case_id} está disponible en esta sesión, "
+                    "pero no se pudo guardar en el archivo de casos."
+                )
 
 else:
     case_data = st.session_state.cases[selected_option]
     st.title(f"🔍 {case_data['title']}")
     st.caption(f"Víctima: {case_data['victim']} | Referencia Policial: {case_data['police_report']}")
     risk_score = compute_risk_score(case_data)
-    st.metric("Riesgo del caso", f"{get_risk_label(risk_score)} · {risk_score}/100")
 
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("💾 Guardar expediente"):
-            try:
-                save_cases_to_json(CASES_FILE, st.session_state.cases)
+            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+            if saved:
                 st.success(f"Expediente guardado en {CASES_FILE}.")
-            except OSError as error:
-                st.error(f"No se pudo guardar el expediente: {error}")
+            else:
+                st.error(f"No se pudo guardar el expediente en {CASES_FILE}.")
     with col_btn2:
         if st.button("🧪 Probar Alerta Telegram"):
             message = (
@@ -262,11 +272,12 @@ else:
             st.error(sync_result.get("message", sync_result.get("reason", "Sync failed")))
 
     # Métricas
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
     col_m1.metric("Pérdida Principal Estimada", f"${case_data['total_loss_usd']:,.2f}")
     col_m2.metric("Fondos Trazados a CEX", f"${case_data['traced_usd']:,.2f}")
     col_m3.metric("Endpoints CEX Identificados", len(case_data['cex_endpoints']))
     col_m4.metric("Estado de Investigación", "Activo / Trazado")
+    col_m5.metric("Riesgo", f"{risk_score}/100", get_risk_label(risk_score))
 
     st.markdown("---")
 

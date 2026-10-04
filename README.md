@@ -1,119 +1,90 @@
-# crypto-case-tracking-system
+# Crypto Case Tracking System
 
-Sistema de rastreo, monitoreo y análisis de casos crypto con:
+Streamlit application for organizing cryptocurrency fraud investigations, reviewing wallet activity, and preparing case evidence for follow-up. It supports local JSON case storage, optional Neo4j synchronization, and optional Telegram alerts.
 
-- Streamlit para la interfaz web
-- Neo4j AuraDB para modelado en grafo
-- Telegram para alertas móviles instantáneas
-- Despliegue listo para Railway
+## Features
 
-## Requisitos
+- Case records for victims, police reports, estimated losses, fiat transfers, wallets, and exchange endpoints.
+- Local persistence in `cases.json` (or the path configured by `CASES_FILE`); existing case IDs cannot be overwritten when creating a case.
+- Address activity lookups for Bitcoin, Litecoin, Ethereum, BNB Smart Chain, Polygon, Solana, XRP Ledger, and TRON. EVM addresses are checked independently on Ethereum, BNB Smart Chain, and Polygon, including native and explorer-reported token balances.
+- Case and wallet/exchange search, per-case risk scoring, fund-flow visualization, and JSON evidence export.
+- Optional Neo4j case/wallet/exchange synchronization and Telegram notifications with in-session alert history.
+- Optional environment-configured login.
 
-- Python 3.10+
-- Cuenta en Neo4j AuraDB
-- Bot de Telegram con token
-- Cuenta de Railway
+Public blockchain explorers and RPC endpoints are queried without API keys. They may impose rate limits or return incomplete data; results are point-in-time leads, not proof of ownership or fraud. Address formats do not identify the blockchain, so supported EVM networks are checked separately.
 
-## Variables de entorno
+## Requirements and local setup
 
-Crea un archivo `.env` con este formato:
-
-```env
-NEO4J_URI=neo4j+s://xxxxx.databases.neo4j.io
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=tu_password
-TELEGRAM_BOT_TOKEN=123456789:ABCDEF...
-TELEGRAM_CHAT_ID=123456789
-AUTH_USERNAME=admin
-AUTH_PASSWORD=replace_with_a_strong_password
-CASES_FILE=cases.json
-```
-
-La autenticación de la aplicación se activa cuando `AUTH_USERNAME` y
-`AUTH_PASSWORD` están configurados. Usa una contraseña fuerte y no subas el
-archivo `.env` al repositorio.
-
-Los casos nuevos se guardan localmente en `CASES_FILE` (por defecto,
-`cases.json`). En Railway, el sistema de archivos puede ser efímero; configura
-un volumen persistente o sincroniza los casos con Neo4j para conservarlos entre
-despliegues.
-
-## Ejecutar localmente
+Python 3.10 or later is required. Neo4j AuraDB and a Telegram bot are optional.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 streamlit run app.py
 ```
 
-Abre en tu navegador:
+Open <http://localhost:8501>. The application seeds an example case on first run and saves newly created cases in `cases.json`. The file is ignored by Git. Set `CASES_FILE` to a durable mounted path when deploying to an environment with ephemeral filesystems.
+
+## Configuration
+
+Set only the integrations you plan to use in `.env` or the deployment environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `AUTH_USERNAME`, `AUTH_PASSWORD` | Enable the built-in login when both are set. |
+| `CASES_FILE` | Optional path for the case JSON file; defaults to `cases.json` in the application directory. |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Optional Neo4j connection and case synchronization. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Optional Telegram alerts. |
+
+Copy `.env.example` for the variable names. Do not commit `.env` or real credentials. Authentication is disabled if either auth variable is absent, so configure both and a strong password before exposing the app.
+
+## Deploying to Railway
+
+The included `railway.json` starts Streamlit on port 8080. Connect the repository to a Railway service, configure the environment variables, and provide persistent storage for the path set in `CASES_FILE`; otherwise locally stored cases may be lost when the service is redeployed. Configure authentication before making the service publicly accessible. Neo4j and Telegram can be omitted if those integrations are not needed.
+
+## Tests
+
+Run the unit tests with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Tests cover authentication, case persistence and normalization, currency parsing, and on-chain address checking. Explorer requests are mocked, so the test suite does not require live network access.
+
+## Project structure
 
 ```text
-http://localhost:8501
-```
-
-## Despliegue en Railway
-
-1. Sube este repositorio a GitHub.
-2. Crea un proyecto en Railway.
-3. Conecta el repositorio.
-4. Agrega las variables de entorno anteriores.
-5. Usa este comando de inicio:
-
-```bash
-streamlit run app.py --server.address 0.0.0.0 --server.port 8080
-```
-
-6. Genera tu dominio público en Railway.
-
-## Funcionamiento
-
-- Permite seleccionar un caso de investigación
-- Muestra evidencias, wallets y endpoints de CEX
-- Genera un grafo visual de flujo de fondos
-- Permite enviar alertas a Telegram
-- Exporta el expediente técnico en JSON
-- Consulta balances nativos y transacciones recientes de direcciones Bitcoin, Litecoin,
-  Ethereum, BNB Smart Chain, Polygon, Solana, XRP Ledger y TRON; las redes EVM
-  también muestran balances de tokens ERC-20/BEP-20
-
-La consulta on-chain usa APIs públicas sin requerir claves. Solo consulta las redes
-mainnet indicadas. Una dirección EVM se consulta de forma independiente en Ethereum,
-BNB Smart Chain y Polygon, ya que el formato de dirección no identifica la red.
-Las consultas EVM incluyen balances nativos y tokens que reporte el explorador;
-las demás redes muestran solo la moneda nativa. Las APIs públicas pueden tener
-límites de uso; los resultados reflejan los datos disponibles al momento de la consulta.
-
-## Estructura del proyecto
-
-```bash
 .
 ├── app.py
-├── requirements.txt
 ├── modules/
-│   ├── __init__.py
-│   ├── alert_history.py
-│   ├── case_loader.py
-│   ├── currency_utils.py
-│   ├── graph_visualizer.py
-│   ├── neo4j_integration.py
-│   ├── onchain.py
-│   ├── risk_scoring.py
-│   └── search_engine.py
+│   ├── __init__.py             # Authentication
+│   ├── alert_history.py        # Session alert history
+│   ├── case_loader.py          # JSON persistence and case payloads
+│   ├── currency_utils.py       # Monetary value normalization
+│   ├── graph_visualizer.py     # Fund-flow graphs
+│   ├── neo4j_integration.py    # Optional graph database integration
+│   ├── onchain.py              # Multi-chain address activity
+│   ├── risk_scoring.py         # Case risk scoring
+│   └── search_engine.py        # Case, wallet, and exchange search
+├── .streamlit/
+│   └── config.toml
 ├── tests/
 │   ├── test_auth.py
 │   ├── test_case_loader.py
 │   ├── test_currency_utils.py
 │   └── test_onchain.py
-├── .streamlit/
-│   └── config.toml
-├── .env.example
-├── README.md
-└── railway.json
+├── requirements.txt
+├── DEPLOYMENT.md
+├── TESTING.md
+├── PROJECT_COMPLETION.md
+├── railway.json
+└── .env.example
 ```
 
-La interfaz integra búsqueda, puntuación de riesgo, gráficos de wallets y
-endpoints registrados, historial de alertas durante la sesión y sincronización
-opcional de cada caso con Neo4j. El gráfico representa los datos registrados;
-no demuestra por sí mismo un flujo de transacciones.
+The interface integrates search, risk scoring, fund-flow diagrams, session alert
+history, and optional Neo4j synchronization. The diagram shows recorded wallets
+and endpoints; it does not prove transaction flows. See [DEPLOYMENT.md](DEPLOYMENT.md)
+for Railway setup and [TESTING.md](TESTING.md) for validation guidance.

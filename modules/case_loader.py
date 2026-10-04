@@ -21,13 +21,19 @@ def load_cases_from_json(file_path: str | Path) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def save_cases_to_json(file_path: str | Path, cases: Dict[str, Dict[str, Any]]) -> None:
+def save_cases_to_json(
+    file_path: str | Path, cases: Dict[str, Dict[str, Any]]
+) -> bool:
     """Guarda casos en archivo JSON."""
     path = Path(file_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(cases, handle, ensure_ascii=False, indent=2)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(cases, handle, ensure_ascii=False, indent=2)
+    except Exception:
+        return False
+    return True
 
 
 def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -53,3 +59,13 @@ def batch_load_cases(cases_list: List[Dict[str, Any]]) -> Dict[str, Dict[str, An
         if case_id:
             result[case_id] = case
     return result
+
+
+def validate_case_id(case_id: str, cases: Dict[str, Dict[str, Any]]) -> str | None:
+    """Valida que el código de caso esté presente y no esté registrado."""
+    normalized_id = case_id.strip()
+    if not normalized_id:
+        return "El código de caso no puede estar vacío."
+    if normalized_id in cases:
+        return f"El caso {normalized_id} ya existe."
+    return None

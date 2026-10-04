@@ -107,15 +107,15 @@ python -m pytest tests/ --cov=modules --cov-report=html
     [ ] Fiat wire details display
     [ ] Wallet addresses show
     [ ] CEX endpoints table visible
-    
+
 [ ] Tab 2: Fund Flow Graph
     [ ] Graph visualization renders
     [ ] Shows: Victim → Scam → Intermediary → CEX
-    
+
 [ ] Tab 3: Real-Time Alerts
     [ ] Alert text area pre-populated
     [ ] "📲 Send Alert" button present
-    
+
 [ ] Tab 4: Legal Export
     [ ] JSON preview displays
     [ ] Download button works
