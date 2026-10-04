@@ -3,11 +3,22 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
-import graphviz
-from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
+from modules.alert_history import add_alert_history, get_case_alerts
+from modules.case_loader import (
+    load_cases_from_json,
+    save_cases_to_json,
+    validate_case_id,
+)
+from modules.graph_visualizer import build_case_graph
+from modules.neo4j_integration import (
+    get_neo4j_driver as create_neo4j_driver,
+    sync_case_to_neo4j,
+)
 from modules.onchain import check_case_addresses
+from modules.risk_scoring import compute_risk_score, get_risk_label
+from modules.search_engine import search_all
 
 # -----------------------------------------------------------------------------
 # CARGA DE VARIABLES DE ENTORNO
@@ -33,24 +44,10 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+CASES_FILE = os.getenv("CASES_FILE", os.path.join(os.path.dirname(__file__), "cases.json"))
 
 # -----------------------------------------------------------------------------
 # CONEXIÓN A NEO4J
-# -----------------------------------------------------------------------------
-def get_neo4j_driver():
-    if NEO4J_URI and NEO4J_PASSWORD:
-        try:
-            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-            driver.verify_connectivity()
-            return driver
-        except Exception as e:
-            st.sidebar.warning(f"Neo4j no conectado: {e}")
-            return None
-    return None
-
-
-# -----------------------------------------------------------------------------
-# TELEGRAM
 # -----------------------------------------------------------------------------
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -112,6 +109,7 @@ if "cases" not in st.session_state:
             ],
         }
     }
+    st.session_state.cases.update(load_cases_from_json(CASES_FILE))
 
 
 # -----------------------------------------------------------------------------
@@ -120,11 +118,25 @@ if "cases" not in st.session_state:
 st.sidebar.title("🛡️ Ciberinteligencia & Forense")
 st.sidebar.markdown("---")
 
-case_options = list(st.session_state.cases.keys()) + ["+ Crear Nuevo Caso"]
+search_query = st.sidebar.text_input("🔎 Buscar caso, wallet o exchange")
+case_options = list(st.session_state.cases.keys())
+if search_query.strip():
+    search_results = search_all(st.session_state.cases, search_query)
+    if search_results:
+        case_options = [result["case_id"] for result in search_results]
+    else:
+        st.sidebar.info("No hay coincidencias; se muestran todos los casos.")
+        case_options = list(st.session_state.cases.keys())
+
+case_options.append("+ Crear Nuevo Caso")
 selected_option = st.sidebar.selectbox("📂 Seleccionar Expediente:", case_options)
 
 st.sidebar.markdown("### 📡 Estado del Sistema")
-neo4j_driver = get_neo4j_driver()
+neo4j_driver = None
+if NEO4J_URI and NEO4J_PASSWORD:
+    neo4j_driver = create_neo4j_driver(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+    if neo4j_driver is None:
+        st.sidebar.warning("Neo4j no conectado.")
 neo4j_status = "🟢 Conectado" if neo4j_driver else "🟡 Modo Local / Sin Neo4j"
 telegram_status = "🟢 Configurado" if (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID) else "🔴 Sin Credenciales"
 
@@ -154,32 +166,54 @@ if selected_option == "+ Crear Nuevo Caso":
         submit_case = st.form_submit_button("🚀 Registrar Caso en el Sistema")
 
     if submit_case:
-        st.session_state.cases[new_case_id] = {
-            "title": f"Caso {new_case_id} ({new_victim} - {new_platform})",
-            "victim": new_victim,
-            "police_report": new_case_id,
-            "total_loss_usd": new_loss,
-            "traced_usd": 0.0,
-            "fiat_wire": {
-                "amount": "$0.00",
-                "bank": "N/A",
-                "beneficiary": "N/A",
-                "receiving_bank": "N/A",
-                "date": "N/A",
-            },
-            "wallets": {
-                "BTC_DEPOSIT": new_btc_wallet,
-                "ETH_USDT_DEPOSIT": new_eth_wallet,
-            },
-            "cex_endpoints": [],
-        }
-        st.success(f"Caso {new_case_id} registrado exitosamente. Selecciónalo en la barra lateral.")
-        st.rerun()
+        case_id_error = validate_case_id(new_case_id, st.session_state.cases)
+        if case_id_error:
+            st.error(case_id_error)
+        else:
+            new_case_id = new_case_id.strip()
+            new_case = {
+                "title": f"Caso {new_case_id} ({new_victim} - {new_platform})",
+                "victim": new_victim,
+                "police_report": new_case_id,
+                "total_loss_usd": new_loss,
+                "traced_usd": 0.0,
+                "fiat_wire": {
+                    "amount": "$0.00",
+                    "bank": "N/A",
+                    "beneficiary": "N/A",
+                    "receiving_bank": "N/A",
+                    "date": "N/A",
+                },
+                "wallets": {
+                    "BTC_DEPOSIT": new_btc_wallet,
+                    "ETH_USDT_DEPOSIT": new_eth_wallet,
+                },
+                "cex_endpoints": [],
+            }
+            st.session_state.cases[new_case_id] = new_case
+            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+            if neo4j_driver:
+                sync_result = sync_case_to_neo4j(neo4j_driver, new_case_id, new_case)
+                if sync_result["status"] != "ok":
+                    st.warning(
+                        sync_result.get(
+                            "message", "No se pudo sincronizar el caso a Neo4j."
+                        )
+                    )
+            if saved:
+                st.success(f"Caso {new_case_id} registrado exitosamente.")
+                st.rerun()
+            else:
+                st.error(
+                    f"El caso {new_case_id} está disponible en esta sesión, "
+                    "pero no se pudo guardar en el archivo de casos."
+                )
 
 else:
     case_data = st.session_state.cases[selected_option]
     st.title(f"🔍 {case_data['title']}")
     st.caption(f"Víctima: {case_data['victim']} | Referencia Policial: {case_data['police_report']}")
+    risk_score = compute_risk_score(case_data)
 
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
@@ -202,11 +236,12 @@ else:
                 st.error(msg)
 
     # Métricas
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
     col_m1.metric("Pérdida Principal Estimada", f"${case_data['total_loss_usd']:,.2f}")
     col_m2.metric("Fondos Trazados a CEX", f"${case_data['traced_usd']:,.2f}")
     col_m3.metric("Endpoints CEX Identificados", len(case_data['cex_endpoints']))
     col_m4.metric("Estado de Investigación", "Activo / Trazado")
+    col_m5.metric("Riesgo", f"{risk_score}/100", get_risk_label(risk_score))
 
     st.markdown("---")
 
@@ -239,7 +274,7 @@ else:
         st.markdown("---")
         st.subheader("⛓️ Consulta on-chain en vivo")
         st.caption(
-            "Consulta balances nativos e historial reciente de Bitcoin y Ethereum. "
+            "Consulta balances nativos e historial reciente de las redes compatibles. "
             "Requiere conexión a exploradores públicos."
         )
         addresses_fingerprint = (
@@ -307,30 +342,7 @@ else:
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
         st.markdown("Visualización de la ruta seguida por los activos desde el origen hasta los exchanges regulados.")
-
-        graph = graphviz.Digraph(format="svg")
-        graph.attr(rankdir="LR", size="8,5")
-
-        graph.node("V", f"Víctima:\n{case_data['victim']}", shape="ellipse", color="blue")
-        graph.node("S", "Plataforma Scam\n(CLF Coin App)", shape="box", color="red")
-        graph.node("I", "Billeteras Intermediarias\n(Layer 1)", shape="box", color="orange")
-        graph.node("A", "Agregación Central\n(Commingling Wallet)", shape="box", color="purple")
-
-        graph.edge("V", "S", label="Depósito")
-        graph.edge("S", "I", label="Split / Peel Chain")
-        graph.edge("I", "A", label="Consolidación")
-
-        for idx, endpoint in enumerate(case_data["cex_endpoints"]):
-            node_id = f"CEX_{idx}"
-            graph.node(
-                node_id,
-                f"Exchange Destino:\n{endpoint['exchange']}\n({endpoint['address'][:8]}...)",
-                shape="doubleoctagon",
-                color="green",
-            )
-            graph.edge("A", node_id, label="Dispersión Final")
-
-        st.graphviz_chart(graph)
+        st.graphviz_chart(build_case_graph(case_data))
 
     with tab3:
         st.subheader("🔔 Sistema Móvil de Alertas Vía Telegram")
@@ -351,9 +363,15 @@ else:
         if st.button("📲 Transmitir Alerta Instantánea al Celular"):
             success, msg = send_telegram_alert(alert_text)
             if success:
+                add_alert_history(selected_option, alert_text)
                 st.success(msg)
             else:
                 st.error(msg)
+
+        case_alerts = get_case_alerts(selected_option)
+        if case_alerts:
+            st.markdown("#### Historial reciente")
+            st.dataframe(pd.DataFrame(case_alerts), use_container_width=True, hide_index=True)
 
     with tab4:
         st.subheader("📄 Generador de Expediente Técnico Normalizado")
