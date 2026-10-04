@@ -198,18 +198,31 @@ def _solana_check(address: str) -> Dict[str, Any]:
         "getSignaturesForAddress",
         [address, {"limit": _RECENT_TRANSACTION_LIMIT, "commitment": "confirmed"}],
     ) or []
-    transactions = []
-    for signature in signatures:
-        transaction = rpc(
+
+    def transaction_for(signature: Dict[str, Any]) -> Any:
+        return rpc(
             "getTransaction",
             [
                 signature["signature"],
                 {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0},
             ],
         )
+
+    if signatures:
+        with ThreadPoolExecutor(max_workers=min(3, len(signatures))) as executor:
+            transaction_details = list(executor.map(transaction_for, signatures))
+    else:
+        transaction_details = []
+
+    transactions = []
+    for signature, transaction in zip(signatures, transaction_details):
         net_lamports = 0
         if transaction:
-            keys = transaction.get("transaction", {}).get("message", {}).get("accountKeys", [])
+            keys = (
+                transaction.get("transaction", {})
+                .get("message", {})
+                .get("accountKeys", [])
+            )
             account_index = next(
                 (
                     index
@@ -260,7 +273,10 @@ def _xrp_check(address: str) -> Dict[str, Any]:
     endpoint = "https://s1.ripple.com:51234/"
     info_response = _post_json(
         endpoint,
-        {"method": "account_info", "params": [{"account": address, "ledger_index": "validated"}]},
+        {
+            "method": "account_info",
+            "params": [{"account": address, "ledger_index": "validated"}],
+        },
     )
     account_info = info_response.get("result", {})
     if account_info.get("error") == "actNotFound":
@@ -305,13 +321,19 @@ def _xrp_check(address: str) -> Dict[str, Any]:
             {
                 "transaction": tx.get("hash", ""),
                 "time": (
-                    datetime.fromtimestamp(timestamp + 946684800, tz=timezone.utc).isoformat()
+                    datetime.fromtimestamp(
+                        timestamp + 946684800, tz=timezone.utc
+                    ).isoformat()
                     if timestamp
                     else "Unknown"
                 ),
                 "direction": direction,
                 "amount": _format_amount(amount_drops, _DROPS_PER_XRP, "XRP"),
-                "status": "Validated" if row.get("validated") else metadata.get("TransactionResult", "Unknown"),
+                "status": (
+                    "Validated"
+                    if row.get("validated")
+                    else metadata.get("TransactionResult", "Unknown")
+                ),
             }
         )
     return {
