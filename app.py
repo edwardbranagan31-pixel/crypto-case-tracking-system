@@ -294,6 +294,13 @@ else:
                         )
                     else:
                         st.info("No transactions returned by the explorer.")
+                    if result.get("tokens"):
+                        st.markdown("**Token balances**")
+                        st.dataframe(
+                            pd.DataFrame(result["tokens"]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
         elif not case_data.get("wallets") and not case_data.get("cex_endpoints"):
             st.info("No wallet or CEX addresses are registered for this case.")
 

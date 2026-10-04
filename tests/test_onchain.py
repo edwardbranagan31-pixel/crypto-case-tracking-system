@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from modules.onchain import (
+    _evm_check,
     check_address_activity,
     check_case_addresses,
     detect_address_network,
@@ -98,7 +99,20 @@ class OnchainTests(unittest.TestCase):
             ]
         }
         transactions.raise_for_status.return_value = None
-        get.side_effect = [details, transactions]
+        tokens = Mock()
+        tokens.json.return_value = [
+            {
+                "token": {
+                    "name": "Test Token",
+                    "symbol": "TST",
+                    "decimals": "6",
+                    "address_hash": "0xtoken",
+                },
+                "value": "1234567",
+            }
+        ]
+        tokens.raise_for_status.return_value = None
+        get.side_effect = [details, transactions, tokens]
 
         result = check_address_activity(ETHEREUM_ADDRESS)
 
@@ -106,6 +120,36 @@ class OnchainTests(unittest.TestCase):
         self.assertEqual(result["balance"], "2.00000000 ETH")
         self.assertEqual(result["transactions"][0]["amount"], "0.50000000 ETH")
         self.assertEqual(result["transactions"][0]["direction"], "Outgoing")
+        self.assertEqual(result["tokens"][0]["balance"], "1.234567")
+
+    @patch("modules.onchain._get_json")
+    def test_checks_native_and_token_balances_for_bnb_and_polygon(self, get):
+        def response_for(url):
+            if url.endswith("/transactions"):
+                return {"items": []}
+            if url.endswith("/token-balances"):
+                return [
+                    {
+                        "token": {
+                            "name": "Stablecoin",
+                            "symbol": "USD",
+                            "decimals": "6",
+                            "address_hash": "0xstable",
+                        },
+                        "value": "2500000",
+                    }
+                ]
+            return {"coin_balance": "1000000000000000000", "transactions_count": 0}
+
+        get.side_effect = response_for
+
+        for network, symbol in (("BNB Smart Chain", "BNB"), ("Polygon", "POL")):
+            with self.subTest(network=network):
+                result = _evm_check(ETHEREUM_ADDRESS, network)
+                self.assertEqual(result["network"], network)
+                self.assertEqual(result["balance"], f"1.00000000 {symbol}")
+                self.assertEqual(result["tokens"][0]["balance"], "2.5")
+                self.assertEqual(get.call_count % 3, 0)
 
     @patch("modules.onchain._post_json")
     def test_checks_solana_balance_and_recent_activity(self, post):
@@ -228,10 +272,17 @@ class OnchainTests(unittest.TestCase):
                 {"status": "ok", "address": ETHEREUM_ADDRESS},
             ],
         ) as check:
-            results = check_case_addresses(wallets, endpoints)
+            with patch("modules.onchain._evm_check") as evm_check:
+                evm_check.side_effect = [
+                    {"network": "Ethereum", "status": "ok", "address": ETHEREUM_ADDRESS},
+                    {"network": "BNB Smart Chain", "status": "ok", "address": ETHEREUM_ADDRESS},
+                    {"network": "Polygon", "status": "ok", "address": ETHEREUM_ADDRESS},
+                ]
+                results = check_case_addresses(wallets, endpoints)
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual(check.call_count, 2)
+        self.assertEqual(len(results), 4)
+        self.assertEqual(check.call_count, 1)
+        self.assertEqual(evm_check.call_count, 3)
 
 
 if __name__ == "__main__":

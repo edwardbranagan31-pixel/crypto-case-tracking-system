@@ -26,6 +26,23 @@ _RECENT_TRANSACTION_LIMIT = 10
 _LAMPORTS_PER_SOL = 1_000_000_000
 _DROPS_PER_XRP = 1_000_000
 _SUN_PER_TRX = 1_000_000
+_EVM_NETWORKS = {
+    "Ethereum": {
+        "api": "https://eth.blockscout.com/api/v2",
+        "explorer": "https://eth.blockscout.com",
+        "symbol": "ETH",
+    },
+    "BNB Smart Chain": {
+        "api": "https://bnb.blockscout.com/api/v2",
+        "explorer": "https://bnb.blockscout.com",
+        "symbol": "BNB",
+    },
+    "Polygon": {
+        "api": "https://polygon.blockscout.com/api/v2",
+        "explorer": "https://polygon.blockscout.com",
+        "symbol": "POL",
+    },
+}
 
 
 def detect_address_network(address: str) -> str | None:
@@ -146,8 +163,13 @@ def _bitcoin_check(address: str) -> Dict[str, Any]:
 
 
 def _ethereum_check(address: str) -> Dict[str, Any]:
+    return _evm_check(address, "Ethereum")
+
+
+def _evm_check(address: str, network: str) -> Dict[str, Any]:
+    config = _EVM_NETWORKS[network]
     encoded_address = quote(address, safe="")
-    base_url = f"https://eth.blockscout.com/api/v2/addresses/{encoded_address}"
+    base_url = f"{config['api']}/addresses/{encoded_address}"
     details = _get_json(base_url)
     transaction_data = _get_json(f"{base_url}/transactions")
     transactions = transaction_data.get("items", [])
@@ -165,18 +187,36 @@ def _ethereum_check(address: str) -> Dict[str, Any]:
                     == address.lower()
                     else "Incoming"
                 ),
-                "amount": _format_amount(amount_wei, 10**18, "ETH"),
+                "amount": _format_amount(amount_wei, 10**18, config["symbol"]),
             }
         )
 
+    token_balances = _get_json(f"{base_url}/token-balances")
+    tokens = []
+    for item in token_balances:
+        token = item.get("token") or {}
+        decimals = int(token.get("decimals") or 0)
+        raw_balance = int(item.get("value") or 0)
+        human_balance = Decimal(raw_balance) / Decimal(10**decimals)
+        if raw_balance:
+            tokens.append(
+                {
+                    "name": token.get("name", "Unknown token"),
+                    "symbol": token.get("symbol") or "Unknown",
+                    "balance": format(human_balance, "f"),
+                    "contract": token.get("address_hash", ""),
+                }
+            )
+
     return {
-        "network": "Ethereum",
+        "network": network,
         "balance": _format_amount(
-            int(details.get("coin_balance") or 0), 10**18, "ETH"
+            int(details.get("coin_balance") or 0), 10**18, config["symbol"]
         ),
         "transaction_count": int(details.get("transactions_count") or 0),
         "transactions": recent_transactions,
-        "explorer": f"https://eth.blockscout.com/address/{encoded_address}",
+        "tokens": tokens,
+        "explorer": f"{config['explorer']}/address/{encoded_address}",
         "status": "ok",
     }
 
@@ -510,11 +550,39 @@ def check_case_addresses(
 
     def check_labeled_address(item: tuple[str, str]) -> Dict[str, Any]:
         label, address = item
+        if detect_address_network(address) == "Ethereum":
+            results = []
+            for network in _EVM_NETWORKS:
+                try:
+                    result = _evm_check(address, network)
+                    result["address"] = address
+                except (
+                    requests.RequestException,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                ) as error:
+                    result = {
+                        "address": address,
+                        "network": network,
+                        "status": "error",
+                        "error": f"Explorer request failed: {error}",
+                        "transactions": [],
+                        "tokens": [],
+                    }
+                result["label"] = label
+                results.append(result)
+            return results
+
         result = check_address_activity(address)
         result["label"] = label
-        return result
+        return [result]
 
     if not addresses:
         return []
     with ThreadPoolExecutor(max_workers=min(5, len(addresses))) as executor:
-        return list(executor.map(check_labeled_address, addresses))
+        return [
+            result
+            for address_results in executor.map(check_labeled_address, addresses)
+            for result in address_results
+        ]
