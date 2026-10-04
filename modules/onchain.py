@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List
 from urllib.parse import quote
 
@@ -30,6 +32,11 @@ def _get_json(url: str) -> Any:
     return response.json()
 
 
+def _format_amount(atomic_units: int, units_per_coin: int, symbol: str) -> str:
+    amount = Decimal(atomic_units) / Decimal(units_per_coin)
+    return f"{amount:.8f} {symbol}"
+
+
 def _bitcoin_check(address: str) -> Dict[str, Any]:
     encoded_address = quote(address, safe="")
     details = _get_json(f"https://mempool.space/api/address/{encoded_address}")
@@ -54,18 +61,27 @@ def _bitcoin_check(address: str) -> Dict[str, Any]:
         )
         net_satoshis = outputs - inputs
         status = transaction.get("status", {})
+        block_time = status.get("block_time")
         recent_transactions.append(
             {
                 "transaction": transaction.get("txid", ""),
-                "time": status.get("block_time", "Pending"),
-                "direction": "Incoming" if net_satoshis >= 0 else "Outgoing",
-                "amount": f"{abs(net_satoshis) / 100_000_000:.8f} BTC",
+                "time": (
+                    datetime.fromtimestamp(block_time, tz=timezone.utc).isoformat()
+                    if block_time
+                    else "Pending"
+                ),
+                "direction": (
+                    "Incoming"
+                    if net_satoshis > 0
+                    else "Outgoing" if net_satoshis < 0 else "Self/Unknown"
+                ),
+                "amount": _format_amount(abs(net_satoshis), 100_000_000, "BTC"),
             }
         )
 
     return {
         "network": "Bitcoin",
-        "balance": f"{(funded - spent) / 100_000_000:.8f} BTC",
+        "balance": _format_amount(funded - spent, 100_000_000, "BTC"),
         "transaction_count": int(stats.get("tx_count", 0)),
         "transactions": recent_transactions,
         "explorer": f"https://mempool.space/address/{encoded_address}",
@@ -93,13 +109,15 @@ def _ethereum_check(address: str) -> Dict[str, Any]:
                     == address.lower()
                     else "Incoming"
                 ),
-                "amount": f"{amount_wei / 10**18:.8f} ETH",
+                "amount": _format_amount(amount_wei, 10**18, "ETH"),
             }
         )
 
     return {
         "network": "Ethereum",
-        "balance": f"{int(details.get('coin_balance') or 0) / 10**18:.8f} ETH",
+        "balance": _format_amount(
+            int(details.get("coin_balance") or 0), 10**18, "ETH"
+        ),
         "transaction_count": int(details.get("transactions_count") or 0),
         "transactions": recent_transactions,
         "explorer": f"https://eth.blockscout.com/address/{encoded_address}",

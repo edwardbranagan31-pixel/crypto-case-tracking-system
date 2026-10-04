@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import requests
+
 from modules.onchain import (
     check_address_activity,
     check_case_addresses,
@@ -25,6 +27,17 @@ class OnchainTests(unittest.TestCase):
         self.assertEqual(result["status"], "unsupported")
         self.assertEqual(result["address"], "not-an-address")
         get.assert_not_called()
+
+    @patch(
+        "modules.onchain.requests.get",
+        side_effect=requests.Timeout("explorer timed out"),
+    )
+    def test_reports_explorer_failures_without_raising(self, get):
+        result = check_address_activity(BITCOIN_ADDRESS)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("explorer timed out", result["error"])
+        get.assert_called_once()
 
     @patch("modules.onchain.requests.get")
     def test_checks_bitcoin_balance_and_transactions(self, get):
