@@ -24,7 +24,13 @@ NEO4J_USER=neo4j
 NEO4J_PASSWORD=tu_password
 TELEGRAM_BOT_TOKEN=123456789:ABCDEF...
 TELEGRAM_CHAT_ID=123456789
+AUTH_USERNAME=admin
+AUTH_PASSWORD=replace_with_a_strong_password
 ```
+
+La autenticación de la aplicación se activa cuando `AUTH_USERNAME` y
+`AUTH_PASSWORD` están configurados. Usa una contraseña fuerte y no subas el
+archivo `.env` al repositorio.
 
 ## Ejecutar localmente
 

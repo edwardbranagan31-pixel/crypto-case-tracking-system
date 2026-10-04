@@ -6,6 +6,7 @@ import streamlit as st
 import graphviz
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
+from modules import auth_sidebar_status, is_auth_enabled, require_login
 
 # -----------------------------------------------------------------------------
 # CARGA DE VARIABLES DE ENTORNO
@@ -18,6 +19,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+if is_auth_enabled():
+    require_login()
+    auth_sidebar_status()
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN
