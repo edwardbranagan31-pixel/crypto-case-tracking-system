@@ -26,11 +26,17 @@ TELEGRAM_BOT_TOKEN=123456789:ABCDEF...
 TELEGRAM_CHAT_ID=123456789
 AUTH_USERNAME=admin
 AUTH_PASSWORD=replace_with_a_strong_password
+CASES_FILE=cases.json
 ```
 
 La autenticación de la aplicación se activa cuando `AUTH_USERNAME` y
 `AUTH_PASSWORD` están configurados. Usa una contraseña fuerte y no subas el
 archivo `.env` al repositorio.
+
+Los casos nuevos se guardan localmente en `CASES_FILE` (por defecto,
+`cases.json`). En Railway, el sistema de archivos puede ser efímero; configura
+un volumen persistente o sincroniza los casos con Neo4j para conservarlos entre
+despliegues.
 
 ## Ejecutar localmente
 
@@ -85,9 +91,29 @@ límites de uso; los resultados reflejan los datos disponibles al momento de la 
 .
 ├── app.py
 ├── requirements.txt
+├── modules/
+│   ├── __init__.py
+│   ├── alert_history.py
+│   ├── case_loader.py
+│   ├── currency_utils.py
+│   ├── graph_visualizer.py
+│   ├── neo4j_integration.py
+│   ├── onchain.py
+│   ├── risk_scoring.py
+│   └── search_engine.py
+├── tests/
+│   ├── test_auth.py
+│   ├── test_case_loader.py
+│   ├── test_currency_utils.py
+│   └── test_onchain.py
 ├── .streamlit/
 │   └── config.toml
 ├── .env.example
 ├── README.md
 └── railway.json
 ```
+
+La interfaz integra búsqueda, puntuación de riesgo, gráficos de wallets y
+endpoints registrados, historial de alertas durante la sesión y sincronización
+opcional de cada caso con Neo4j. El gráfico representa los datos registrados;
+no demuestra por sí mismo un flujo de transacciones.
