@@ -33,7 +33,7 @@ def is_auth_enabled() -> bool:
 
 def is_authenticated() -> bool:
     state = _session_state()
-    return bool(state.get("authenticated", False)) if isinstance(state, dict) else False
+    return bool(state.get("authenticated", False))
 
 
 def logout() -> None:

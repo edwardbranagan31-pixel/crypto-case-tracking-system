@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from modules.currency_utils import _to_float
+
 
 def get_neo4j_driver(uri: str, user: str, password: str):
     """Crea conexión a Neo4j AuraDB."""
@@ -12,19 +14,6 @@ def get_neo4j_driver(uri: str, user: str, password: str):
         return driver
     except Exception:
         return None
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    """Convierte valores monetarios a float aceptando strings formateados."""
-    if value is None or value == "":
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
-        return float(cleaned)
-    except (TypeError, ValueError):
-        return default
 
 
 def sync_case_to_neo4j(driver: Optional[Any], case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:

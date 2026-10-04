@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from modules.currency_utils import _to_float
+
 
 def load_cases_from_json(file_path: str | Path) -> Dict[str, Dict[str, Any]]:
     """Carga múltiples casos desde archivo JSON."""
@@ -29,19 +31,6 @@ def save_cases_to_json(file_path: str | Path, cases: Dict[str, Dict[str, Any]]) 
             json.dump(cases, handle, ensure_ascii=False, indent=2)
     except Exception:
         pass
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    """Convierte un valor de dinero a float sin romper con cadenas formateadas."""
-    if value is None or value == "":
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
-        return float(cleaned)
-    except (TypeError, ValueError):
-        return default
 
 
 def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:

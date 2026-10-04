@@ -2,18 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    """Convierte un valor arbitrario a float sin romper si llega un string no numérico."""
-    if value is None or value == "":
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
-        return float(cleaned)
-    except (TypeError, ValueError):
-        return default
+from modules.currency_utils import _to_float
 
 
 def compute_risk_score(case_data: Dict[str, Any]) -> float:
