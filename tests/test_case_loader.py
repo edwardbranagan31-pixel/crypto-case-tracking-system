@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,9 +13,13 @@ from modules.case_loader import (
 
 
 class CaseLoaderTests(unittest.TestCase):
-    def test_missing_case_file_returns_empty_mapping(self):
+    def test_missing_or_invalid_case_file_returns_empty_mapping(self):
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(load_cases_from_json(Path(directory) / "missing.json"), {})
+            path = Path(directory) / "cases.json"
+            self.assertEqual(load_cases_from_json(path), {})
+
+            path.write_text("{invalid json", encoding="utf-8")
+            self.assertEqual(load_cases_from_json(path), {})
 
     def test_save_creates_parent_and_round_trips_cases(self):
         cases = {"CASE-1": {"victim": "Example", "wallets": {"BTC": "address"}}}
@@ -24,6 +29,7 @@ class CaseLoaderTests(unittest.TestCase):
             self.assertTrue(save_cases_to_json(path, cases))
 
             self.assertEqual(load_cases_from_json(path), cases)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), cases)
 
     def test_save_reports_file_write_failures(self):
         with tempfile.TemporaryDirectory() as directory:

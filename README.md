@@ -69,8 +69,22 @@ Tests cover authentication, case persistence and normalization, currency parsing
 │   ├── onchain.py              # Multi-chain address activity
 │   ├── risk_scoring.py         # Case risk scoring
 │   └── search_engine.py        # Case, wallet, and exchange search
+├── .streamlit/
+│   └── config.toml
 ├── tests/
+│   ├── test_auth.py
+│   ├── test_case_loader.py
+│   ├── test_currency_utils.py
+│   └── test_onchain.py
 ├── requirements.txt
+├── DEPLOYMENT.md
+├── TESTING.md
+├── PROJECT_COMPLETION.md
 ├── railway.json
 └── .env.example
 ```
+
+The interface integrates search, risk scoring, fund-flow diagrams, session alert
+history, and optional Neo4j synchronization. The diagram shows recorded wallets
+and endpoints; it does not prove transaction flows. See [DEPLOYMENT.md](DEPLOYMENT.md)
+for Railway setup and [TESTING.md](TESTING.md) for validation guidance.

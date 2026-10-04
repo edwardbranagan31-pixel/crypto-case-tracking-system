@@ -44,10 +44,12 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-CASES_FILE = os.getenv("CASES_FILE", os.path.join(os.path.dirname(__file__), "cases.json"))
+CASES_FILE = os.getenv(
+    "CASES_FILE", os.path.join(os.path.dirname(__file__), "cases.json")
+)
 
 # -----------------------------------------------------------------------------
-# CONEXIÓN A NEO4J
+# TELEGRAM
 # -----------------------------------------------------------------------------
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -72,7 +74,7 @@ def send_telegram_alert(message):
 # CASOS PREDETERMINADOS
 # -----------------------------------------------------------------------------
 if "cases" not in st.session_state:
-    st.session_state.cases = {
+    st.session_state.cases = load_cases_from_json(CASES_FILE) or {
         "NC-JOHNSTON-2024-3912": {
             "title": "Caso #2024-3912 (Edward Branagan - CLF Coin)",
             "victim": "Edward Andres Branagan",
@@ -109,7 +111,6 @@ if "cases" not in st.session_state:
             ],
         }
     }
-    st.session_state.cases.update(load_cases_from_json(CASES_FILE))
 
 
 # -----------------------------------------------------------------------------
@@ -118,18 +119,20 @@ if "cases" not in st.session_state:
 st.sidebar.title("🛡️ Ciberinteligencia & Forense")
 st.sidebar.markdown("---")
 
-search_query = st.sidebar.text_input("🔎 Buscar caso, wallet o exchange")
-case_options = list(st.session_state.cases.keys())
-if search_query.strip():
-    search_results = search_all(st.session_state.cases, search_query)
-    if search_results:
-        case_options = [result["case_id"] for result in search_results]
-    else:
-        st.sidebar.info("No hay coincidencias; se muestran todos los casos.")
-        case_options = list(st.session_state.cases.keys())
-
-case_options.append("+ Crear Nuevo Caso")
+case_options = list(st.session_state.cases.keys()) + ["+ Crear Nuevo Caso"]
 selected_option = st.sidebar.selectbox("📂 Seleccionar Expediente:", case_options)
+search_query = st.sidebar.text_input("🔎 Buscar casos, wallets o exchanges")
+if search_query.strip():
+    matches = search_all(st.session_state.cases, search_query)
+    if matches:
+        st.sidebar.caption("Resultados")
+        for match in matches:
+            st.sidebar.write(
+                f"**{match['case_id']}** · {match.get('title', '')} "
+                f"({match['match_type']})"
+            )
+    else:
+        st.sidebar.caption("No se encontraron coincidencias.")
 
 st.sidebar.markdown("### 📡 Estado del Sistema")
 neo4j_driver = None
@@ -160,21 +163,41 @@ if selected_option == "+ Crear Nuevo Caso":
 
         with col2:
             new_loss = st.number_input("Pérdida Total Estimada ($ USD)", value=50000.0, step=1000.0)
-            new_btc_wallet = st.text_input("Dirección de Depósito BTC", value="")
-            new_eth_wallet = st.text_input("Dirección de Depósito ETH/USDT", value="")
+            new_wallets_text = st.text_area(
+                "Direcciones de wallets (una por línea; cualquier red soportada)",
+                value="",
+            )
+            new_cex_exchange = st.text_input("Exchange CEX (opcional)", value="")
+            new_cex_address = st.text_input("Dirección CEX (opcional)", value="")
 
         submit_case = st.form_submit_button("🚀 Registrar Caso en el Sistema")
 
     if submit_case:
-        case_id_error = validate_case_id(new_case_id, st.session_state.cases)
+        normalized_case_id = new_case_id.strip()
+        case_id_error = validate_case_id(normalized_case_id, st.session_state.cases)
         if case_id_error:
             st.error(case_id_error)
+        elif bool(new_cex_exchange.strip()) != bool(new_cex_address.strip()):
+            st.error("Indica tanto el exchange como su dirección CEX.")
         else:
-            new_case_id = new_case_id.strip()
+            wallets = {
+                f"WALLET_{index}": address.strip()
+                for index, address in enumerate(new_wallets_text.splitlines(), start=1)
+                if address.strip()
+            }
+            cex_endpoints = []
+            if new_cex_exchange.strip() and new_cex_address.strip():
+                cex_endpoints.append(
+                    {
+                        "exchange": new_cex_exchange.strip(),
+                        "address": new_cex_address.strip(),
+                        "type": "Address",
+                    }
+                )
             new_case = {
-                "title": f"Caso {new_case_id} ({new_victim} - {new_platform})",
+                "title": f"Caso {normalized_case_id} ({new_victim} - {new_platform})",
                 "victim": new_victim,
-                "police_report": new_case_id,
+                "police_report": normalized_case_id,
                 "total_loss_usd": new_loss,
                 "traced_usd": 0.0,
                 "fiat_wire": {
@@ -184,16 +207,15 @@ if selected_option == "+ Crear Nuevo Caso":
                     "receiving_bank": "N/A",
                     "date": "N/A",
                 },
-                "wallets": {
-                    "BTC_DEPOSIT": new_btc_wallet,
-                    "ETH_USDT_DEPOSIT": new_eth_wallet,
-                },
-                "cex_endpoints": [],
+                "wallets": wallets,
+                "cex_endpoints": cex_endpoints,
             }
-            st.session_state.cases[new_case_id] = new_case
+            st.session_state.cases[normalized_case_id] = new_case
             saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
             if neo4j_driver:
-                sync_result = sync_case_to_neo4j(neo4j_driver, new_case_id, new_case)
+                sync_result = sync_case_to_neo4j(
+                    neo4j_driver, normalized_case_id, new_case
+                )
                 if sync_result["status"] != "ok":
                     st.warning(
                         sync_result.get(
@@ -201,11 +223,14 @@ if selected_option == "+ Crear Nuevo Caso":
                         )
                     )
             if saved:
-                st.success(f"Caso {new_case_id} registrado exitosamente.")
+                st.success(
+                    f"Caso {normalized_case_id} registrado. "
+                    "Selecciónalo en la barra lateral."
+                )
                 st.rerun()
             else:
                 st.error(
-                    f"El caso {new_case_id} está disponible en esta sesión, "
+                    f"El caso {normalized_case_id} está disponible en esta sesión, "
                     "pero no se pudo guardar en el archivo de casos."
                 )
 
@@ -218,8 +243,12 @@ else:
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("📥 Cargar Expediente Completo"):
-            st.success(f"Expediente del caso {selected_option} cargado correctamente.")
+        if st.button("💾 Guardar expediente"):
+            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+            if saved:
+                st.success(f"Expediente guardado en {CASES_FILE}.")
+            else:
+                st.error(f"No se pudo guardar el expediente en {CASES_FILE}.")
     with col_btn2:
         if st.button("🧪 Probar Alerta Telegram"):
             message = (
@@ -234,6 +263,13 @@ else:
                 st.success(msg)
             else:
                 st.error(msg)
+
+    if neo4j_driver and st.button("🔄 Sincronizar caso con Neo4j"):
+        sync_result = sync_case_to_neo4j(neo4j_driver, selected_option, case_data)
+        if sync_result["status"] == "ok":
+            st.success(sync_result["message"])
+        else:
+            st.error(sync_result.get("message", sync_result.get("reason", "Sync failed")))
 
     # Métricas
     col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
@@ -274,7 +310,8 @@ else:
         st.markdown("---")
         st.subheader("⛓️ Consulta on-chain en vivo")
         st.caption(
-            "Consulta balances nativos e historial reciente de las redes compatibles. "
+            "Consulta balances nativos e historial reciente en Bitcoin, Litecoin, Ethereum, "
+            "BNB Smart Chain, Polygon, Solana, XRP Ledger y TRON. "
             "Requiere conexión a exploradores públicos."
         )
         addresses_fingerprint = (
@@ -341,7 +378,7 @@ else:
 
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
-        st.markdown("Visualización de la ruta seguida por los activos desde el origen hasta los exchanges regulados.")
+        st.caption("Diagrama de wallets y endpoints registrados; no representa transacciones verificadas.")
         st.graphviz_chart(build_case_graph(case_data))
 
     with tab3:
@@ -354,8 +391,9 @@ else:
                 f"🚨 *ALERTA DE DETECCIÓN CEX - {selected_option}*\n\n"
                 f"• *Víctima:* {case_data['victim']}\n"
                 f"• *Monto Trazado:* ${case_data['traced_usd']:,.2f} USD\n"
-                f"• *CEX Identificados:* Binance, OKX, Coinbase\n"
-                f"• *Estado:* Requerimiento de Preservación Listo.\n\n"
+                f"• *CEX Identificados:* "
+                f"{', '.join(endpoint.get('exchange', 'Unknown') for endpoint in case_data['cex_endpoints']) or 'Sin datos'}\n"
+                f"• *Estado:* Expediente disponible para revisión.\n\n"
                 f"📍 *Acción:* Revisar expediente en el panel."
             ),
         )
@@ -368,10 +406,13 @@ else:
             else:
                 st.error(msg)
 
+        st.markdown("#### Historial de alertas")
         case_alerts = get_case_alerts(selected_option)
         if case_alerts:
-            st.markdown("#### Historial reciente")
-            st.dataframe(pd.DataFrame(case_alerts), use_container_width=True, hide_index=True)
+            for alert in case_alerts:
+                st.caption(f"{alert['timestamp']} · {alert['message']}")
+        else:
+            st.info("Aún no hay alertas enviadas para este caso en esta sesión.")
 
     with tab4:
         st.subheader("📄 Generador de Expediente Técnico Normalizado")
