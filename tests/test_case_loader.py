@@ -27,9 +27,9 @@ class CasePersistenceTests(unittest.TestCase):
 
     def test_save_surfaces_write_errors(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "missing" / "cases.json"
+            path = Path(directory)
             with self.assertRaises(OSError):
-                save_cases_to_json(path.parent, {})
+                save_cases_to_json(path, {})
 
 
 if __name__ == "__main__":
