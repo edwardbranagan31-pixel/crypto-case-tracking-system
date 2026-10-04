@@ -68,12 +68,15 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8080
 - Genera un grafo visual de flujo de fondos
 - Permite enviar alertas a Telegram
 - Exporta el expediente técnico en JSON
-- Consulta balances nativos y transacciones recientes de direcciones Bitcoin y Ethereum
+- Consulta balances nativos y transacciones recientes de direcciones Bitcoin, Litecoin,
+  Ethereum, Solana, XRP Ledger y TRON
 
-La consulta on-chain usa los exploradores públicos mempool.space y Blockscout, sin
-requerir API keys. Está limitada a Bitcoin mainnet y Ethereum mainnet, puede estar
-sujeta a límites de solicitudes y muestra datos del explorador en el momento de
-la consulta; los tokens ERC-20 no se incluyen en el balance.
+La consulta on-chain usa APIs públicas sin requerir claves. Solo consulta las redes
+mainnet indicadas y monedas nativas; no incluye tokens (como ERC-20 o TRC-20).
+Las direcciones EVM de BNB Smart Chain, Polygon y otras redes compatibles con
+Ethereum no se pueden distinguir por su formato y no se verifican como esas redes.
+Las APIs públicas pueden tener límites de uso; los resultados reflejan los datos
+disponibles al momento de la consulta.
 
 ## Estructura del proyecto
 
