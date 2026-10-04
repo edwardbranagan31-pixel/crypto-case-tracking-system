@@ -14,6 +14,19 @@ def get_neo4j_driver(uri: str, user: str, password: str):
         return None
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    """Convierte valores monetarios a float aceptando strings formateados."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return default
+
+
 def sync_case_to_neo4j(driver: Optional[Any], case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
     """Sincroniza caso a Neo4j creando nodos Case, Wallet, Exchange y relaciones."""
     if driver is None:
@@ -36,8 +49,8 @@ def sync_case_to_neo4j(driver: Optional[Any], case_id: str, case_data: Dict[str,
                 title=case_data.get("title", case_id),
                 victim=case_data.get("victim", "Unknown"),
                 police_report=case_data.get("police_report", case_id),
-                total_loss_usd=float(case_data.get("total_loss_usd", 0.0) or 0.0),
-                traced_usd=float(case_data.get("traced_usd", 0.0) or 0.0),
+                total_loss_usd=_to_float(case_data.get("total_loss_usd", 0.0)),
+                traced_usd=_to_float(case_data.get("traced_usd", 0.0)),
             )
 
             # Crear nodos Wallet y relaciones TRACKS

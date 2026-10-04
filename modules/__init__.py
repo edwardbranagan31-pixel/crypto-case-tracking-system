@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import hmac
 import os
-import streamlit as st
+from typing import Any
+
+try:
+    import streamlit as st
+except ModuleNotFoundError:  # pragma: no cover - Streamlit is optional in non-app contexts.
+    st = None
 
 
 def _get_env(name: str, default: str = "") -> str:
@@ -13,6 +18,12 @@ def _safe_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 
+def _session_state() -> Any:
+    if st is None:
+        return {}
+    return st.session_state
+
+
 def is_auth_enabled() -> bool:
     """
     Activa autenticación si AUTH_USERNAME y AUTH_PASSWORD están definidos.
@@ -21,10 +32,13 @@ def is_auth_enabled() -> bool:
 
 
 def is_authenticated() -> bool:
-    return bool(st.session_state.get("authenticated", False))
+    state = _session_state()
+    return bool(state.get("authenticated", False)) if isinstance(state, dict) else False
 
 
 def logout() -> None:
+    if st is None:
+        return
     st.session_state["authenticated"] = False
     st.session_state["auth_user"] = ""
 
@@ -42,6 +56,8 @@ def require_login() -> bool:
     Renderiza login y bloquea la app hasta autenticar.
     Devuelve True si ya está autenticado.
     """
+    if st is None:
+        return False
     if is_authenticated():
         return True
 
@@ -70,6 +86,8 @@ def auth_sidebar_status() -> None:
     """
     Muestra estado de sesión en sidebar.
     """
+    if st is None:
+        return
     if is_authenticated():
         user = st.session_state.get("auth_user", "authorized_user")
         st.sidebar.success(f"🔐 Sesión: {user}")

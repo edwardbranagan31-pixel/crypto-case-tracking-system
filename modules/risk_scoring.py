@@ -3,6 +3,19 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    """Convierte un valor arbitrario a float sin romper si llega un string no numérico."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return default
+
+
 def compute_risk_score(case_data: Dict[str, Any]) -> float:
     """Calcula puntuación de riesgo del caso (0-100).
     
@@ -14,8 +27,8 @@ def compute_risk_score(case_data: Dict[str, Any]) -> float:
     - Wire bancario documentado (5 puntos)
     - Base mínima (15 puntos)
     """
-    total_loss = float(case_data.get("total_loss_usd", 0.0) or 0.0)
-    traced = float(case_data.get("traced_usd", 0.0) or 0.0)
+    total_loss = _to_float(case_data.get("total_loss_usd", 0.0))
+    traced = _to_float(case_data.get("traced_usd", 0.0))
     wallet_count = len(case_data.get("wallets", {}) or {})
     cex_count = len(case_data.get("cex_endpoints", []) or [])
     has_fiat_wire = case_data.get("fiat_wire", {}).get("amount") not in (None, "", "N/A")

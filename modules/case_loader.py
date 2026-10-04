@@ -31,6 +31,19 @@ def save_cases_to_json(file_path: str | Path, cases: Dict[str, Dict[str, Any]]) 
         pass
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    """Convierte un valor de dinero a float sin romper con cadenas formateadas."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        cleaned = str(value).replace("$", "").replace(",", "").replace(" USD", "")
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
     """Prepara payload normalizado de caso para API o Neo4j."""
     return {
@@ -38,8 +51,8 @@ def get_case_payload(case_id: str, case_data: Dict[str, Any]) -> Dict[str, Any]:
         "title": case_data.get("title", case_id),
         "victim": case_data.get("victim", "Unknown"),
         "police_report": case_data.get("police_report", case_id),
-        "total_loss_usd": float(case_data.get("total_loss_usd", 0.0)),
-        "traced_usd": float(case_data.get("traced_usd", 0.0)),
+        "total_loss_usd": _to_float(case_data.get("total_loss_usd", 0.0)),
+        "traced_usd": _to_float(case_data.get("traced_usd", 0.0)),
         "wallets": case_data.get("wallets", {}),
         "cex_endpoints": case_data.get("cex_endpoints", []),
         "fiat_wire": case_data.get("fiat_wire", {}),
