@@ -418,7 +418,10 @@ else:
             st.markdown(f"**Nodo seleccionado:** `{selected_entity.type}` · {selected_entity.value}")
             options = available_transforms(selected_entity)
             if options:
-                chosen = st.selectbox("Transformación", options, format_func=lambda t: f"{t.name} — {t.description}")
+                by_name = {t.name: t for t in options}
+                chosen_name = st.selectbox("Transformación", list(by_name),
+                                           format_func=lambda n: f"{n} — {by_name[n].description}")
+                chosen = by_name[chosen_name]
                 if st.button("▶️ Ejecutar transformación"):
                     res = run_transform(chosen.name, selected_entity, entity_graph,
                                         {"cases": st.session_state.cases})
