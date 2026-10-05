@@ -37,7 +37,10 @@ Open <http://localhost:8501>. The application seeds an example case on first run
 
 - Collaboration/export (`modules/collaboration.py`): graph export to CSV/JSON/PDF, graph included in the authorities' dossier JSON, graph persistence in Neo4j (`:Entity`/`:LINK`), JSON-lines audit trail of transforms/saves/syncs (`AUDIT_FILE`), and optional per-case `allowed_users` list enforced when login is enabled.
 
-Not yet implemented: machines, graph analysis.
+- Machines (`modules/machines.py`): chained multi-hop transform runs with an entity cap and exchange flagging, run from the selected node.
+- Analysis (`modules/analysis.py`): degree centrality, clusters, hubs, heuristic mixer/aggregator candidates, graph-adjusted risk score (up to +15), transaction timeline.
+
+All phases are implemented. Address-to-transactions links transactions only (explorer data has no counterparties), so multi-hop tracing mostly expands via token contracts and shared cases; mixer flags are leads, not proof.
 
 ## Configuration
 

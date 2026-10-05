@@ -22,6 +22,9 @@ from modules.graph_canvas import LAYOUTS, graph_to_canvas, load_graph, parse_nod
 from modules.transforms import available_transforms, run_transform
 from modules.collaboration import (can_access_case, graph_to_csv, graph_to_json, graph_to_pdf,
                                    read_audit, record_audit, sync_graph_to_neo4j)
+from modules.analysis import (clusters, combined_risk, find_hubs, find_mixer_candidates,
+                              transaction_timeline)
+from modules.machines import MACHINES, run_machine
 from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
@@ -431,6 +434,48 @@ else:
         else:
             st.caption("Haz clic en un nodo para ejecutar transformaciones.")
 
+        if selected_entity:
+            compatible = {n: m for n, m in MACHINES.items()}
+            machine_name = st.selectbox("Machine", list(compatible), format_func=lambda n: f"{n} — {compatible[n].description}")
+            if st.button("⚙️ Ejecutar machine sobre el nodo"):
+                with st.spinner("Ejecutando machine..."):
+                    res = run_machine(machine_name, selected_entity, entity_graph, {"cases": st.session_state.cases})
+                record_audit(st.session_state.get("auth_user", ""), f"machine:{machine_name}", selected_option,
+                             f"{selected_entity.type}:{selected_entity.value} -> +{res['added']}")
+                st.session_state["machine_result"] = res
+                st.rerun()
+        if st.session_state.get("machine_result"):
+            res = st.session_state.pop("machine_result")
+            st.success(f"Machine: {res['added']} entidades nuevas, {res.get('flagged', 0)} marcadas como exchange.")
+            for err in res["errors"]:
+                st.warning(err)
+
+        with st.expander("📈 Análisis del grafo"):
+            graph_risk = combined_risk(risk_score, entity_graph)
+            st.metric("Riesgo combinado (caso + grafo)", f"{graph_risk['score']}/100", f"+{graph_risk['points']}")
+            for finding in graph_risk["findings"]:
+                st.caption(f"• {finding}")
+            hubs = find_hubs(entity_graph)
+            st.markdown("**Hubs**")
+            if hubs:
+                st.dataframe(pd.DataFrame(hubs))
+            else:
+                st.caption("Sin hubs detectados.")
+            mixers = find_mixer_candidates(entity_graph)
+            st.markdown("**Posibles mixers / agregadores (heurística, no prueba)**")
+            if mixers:
+                st.dataframe(pd.DataFrame(mixers))
+            else:
+                st.caption("Sin candidatos.")
+            comps = clusters(entity_graph)
+            st.markdown(f"**Clusters:** {len(comps)} (el mayor con {len(comps[0]) if comps else 0} entidades)")
+            timeline = transaction_timeline(entity_graph)
+            st.markdown("**Línea de tiempo de transacciones**")
+            if timeline:
+                st.dataframe(pd.DataFrame(timeline))
+            else:
+                st.caption("Sin transacciones con fecha. Ejecuta address_to_transactions.")
+
         col_s, col_r = st.columns(2)
         if col_s.button("💾 Guardar grafo"):
             if save_graph(selected_option, entity_graph):
@@ -450,7 +495,10 @@ else:
         if col_d.button("🔄 Grafo a Neo4j"):
             res = sync_graph_to_neo4j(neo4j_driver, selected_option, entity_graph)
             record_audit(st.session_state.get("auth_user", ""), "neo4j_graph_sync", selected_option, res["status"])
-            st.info(f"Neo4j: {res['status']}") if res["status"] != "error" else st.error(res["error"])
+            if res["status"] != "error":
+                st.info(f"Neo4j: {res['status']}")
+            else:
+                st.error(res["error"])
         with st.expander("Registro de auditoría"):
             for entry in reversed(read_audit(selected_option)[-50:]):
                 st.caption(f"{entry['timestamp']} · {entry['user']} · {entry['action']} · {entry['detail']}")
