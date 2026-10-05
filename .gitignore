@@ -6,3 +6,5 @@ cases.json
 .DS_Store
 graphs/
 audit_log.jsonl
+saas.db
+saas_data/
