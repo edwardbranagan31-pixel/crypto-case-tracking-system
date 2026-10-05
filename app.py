@@ -20,6 +20,8 @@ from modules.neo4j_integration import (
 from modules.entities import ENTITY_TYPES, case_to_graph
 from modules.graph_canvas import LAYOUTS, graph_to_canvas, load_graph, parse_node_id, save_graph
 from modules.transforms import available_transforms, run_transform
+from modules.collaboration import (can_access_case, graph_to_csv, graph_to_json, graph_to_pdf,
+                                   read_audit, record_audit, sync_graph_to_neo4j)
 from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
@@ -241,6 +243,9 @@ if selected_option == "+ Crear Nuevo Caso":
 
 else:
     case_data = st.session_state.cases[selected_option]
+    if not can_access_case(st.session_state.get("auth_user", ""), case_data, is_auth_enabled()):
+        st.error("No tienes acceso a este caso.")
+        st.stop()
     st.title(f"🔍 {case_data['title']}")
     st.caption(f"Víctima: {case_data['victim']} | Referencia Policial: {case_data['police_report']}")
     risk_score = compute_risk_score(case_data)
@@ -414,6 +419,8 @@ else:
                 if st.button("▶️ Ejecutar transformación"):
                     res = run_transform(chosen.name, selected_entity, entity_graph,
                                         {"cases": st.session_state.cases})
+                    record_audit(st.session_state.get("auth_user", ""), f"transform:{chosen.name}",
+                                 selected_option, f"{selected_entity.type}:{selected_entity.value} -> {res['status']}")
                     if res["status"] == "ok":
                         st.success(f"{res['added']} entidades nuevas.")
                         st.rerun()
@@ -426,10 +433,27 @@ else:
 
         col_s, col_r = st.columns(2)
         if col_s.button("💾 Guardar grafo"):
-            st.success("Grafo guardado.") if save_graph(selected_option, entity_graph) else st.error("No se pudo guardar.")
+            if save_graph(selected_option, entity_graph):
+                record_audit(st.session_state.get("auth_user", ""), "save_graph", selected_option)
+                st.success("Grafo guardado.")
+            else:
+                st.error("No se pudo guardar.")
         if col_r.button("↩️ Reiniciar desde el caso"):
             graphs[selected_option] = case_to_graph(selected_option, case_data)
             st.rerun()
+
+        st.markdown("#### Exportar y colaborar")
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.download_button("📥 CSV", graph_to_csv(entity_graph), f"grafo_{selected_option}.csv", "text/csv")
+        col_b.download_button("📥 JSON", graph_to_json(entity_graph), f"grafo_{selected_option}.json", "application/json")
+        col_c.download_button("📥 PDF", graph_to_pdf(selected_option, entity_graph), f"grafo_{selected_option}.pdf", "application/pdf")
+        if col_d.button("🔄 Grafo a Neo4j"):
+            res = sync_graph_to_neo4j(neo4j_driver, selected_option, entity_graph)
+            record_audit(st.session_state.get("auth_user", ""), "neo4j_graph_sync", selected_option, res["status"])
+            st.info(f"Neo4j: {res['status']}") if res["status"] != "error" else st.error(res["error"])
+        with st.expander("Registro de auditoría"):
+            for entry in reversed(read_audit(selected_option)[-50:]):
+                st.caption(f"{entry['timestamp']} · {entry['user']} · {entry['action']} · {entry['detail']}")
 
     with tab3:
         st.subheader("🔔 Sistema Móvil de Alertas Vía Telegram")
@@ -479,6 +503,8 @@ else:
             "fiat_wire_evidence": case_data["fiat_wire"],
             "monitored_wallets": case_data["wallets"],
             "target_cex_accounts": case_data["cex_endpoints"],
+            "entity_graph": (st.session_state.get("entity_graphs", {}).get(selected_option)
+                             or case_to_graph(selected_option, case_data)).to_dict(),
             "legal_request": "SOLICITUD FORMAL DE CONGELAMIENTO PREVENTIVO Y REGISTROS KYC/IP",
         }
 

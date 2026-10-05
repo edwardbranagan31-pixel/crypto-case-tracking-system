@@ -5,3 +5,4 @@ __pycache__/
 cases.json
 .DS_Store
 graphs/
+audit_log.jsonl

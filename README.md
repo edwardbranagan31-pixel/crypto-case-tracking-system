@@ -35,7 +35,9 @@ Open <http://localhost:8501>. The application seeds an example case on first run
 
 - Interactive graph canvas (`modules/graph_canvas.py`, streamlit-agraph): click a node to run transforms, filter and colour by entity type, organic/hierarchical layouts, and save/load per case in `graphs/` (or `GRAPHS_DIR`).
 
-Not yet implemented: machines, graph analysis, Neo4j graph persistence, per-user audit and PDF/CSV export.
+- Collaboration/export (`modules/collaboration.py`): graph export to CSV/JSON/PDF, graph included in the authorities' dossier JSON, graph persistence in Neo4j (`:Entity`/`:LINK`), JSON-lines audit trail of transforms/saves/syncs (`AUDIT_FILE`), and optional per-case `allowed_users` list enforced when login is enabled.
+
+Not yet implemented: machines, graph analysis.
 
 ## Configuration
 
