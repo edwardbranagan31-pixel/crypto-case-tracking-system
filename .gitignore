@@ -4,3 +4,4 @@ __pycache__/
 .env
 cases.json
 .DS_Store
+graphs/

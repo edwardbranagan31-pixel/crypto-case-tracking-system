@@ -3,6 +3,7 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
+from streamlit_agraph import Config, Edge, Node, agraph
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
 from modules.alert_history import add_alert_history, get_case_alerts
@@ -16,6 +17,9 @@ from modules.neo4j_integration import (
     get_neo4j_driver as create_neo4j_driver,
     sync_case_to_neo4j,
 )
+from modules.entities import ENTITY_TYPES, case_to_graph
+from modules.graph_canvas import LAYOUTS, graph_to_canvas, load_graph, parse_node_id, save_graph
+from modules.transforms import available_transforms, run_transform
 from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
@@ -381,7 +385,51 @@ else:
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
         st.caption("Diagrama de wallets y endpoints registrados; no representa transacciones verificadas.")
-        st.graphviz_chart(build_case_graph(case_data))
+        with st.expander("Diagrama estático (Graphviz)"):
+            st.graphviz_chart(build_case_graph(case_data))
+
+        graphs = st.session_state.setdefault("entity_graphs", {})
+        if selected_option not in graphs:
+            graphs[selected_option] = load_graph(selected_option) or case_to_graph(selected_option, case_data)
+        entity_graph = graphs[selected_option]
+
+        col_f, col_l = st.columns(2)
+        visible = col_f.multiselect("Filtrar por tipo", ENTITY_TYPES, default=list(ENTITY_TYPES))
+        layout = col_l.selectbox("Disposición", LAYOUTS)
+        canvas = graph_to_canvas(entity_graph, visible)
+        a_nodes = [Node(id=n["id"], label=n["label"], color=n["color"], title=n["title"], size=20)
+                   for n in canvas["nodes"]]
+        a_edges = [Edge(source=e["source"], target=e["target"], label=e["label"]) for e in canvas["edges"]]
+        a_config = Config(width=900, height=500, directed=True,
+                          hierarchical=layout == "hierarchical", physics=layout != "hierarchical")
+        clicked = agraph(nodes=a_nodes, edges=a_edges, config=a_config)
+
+        key = parse_node_id(clicked) if clicked else None
+        selected_entity = entity_graph.entities.get(key) if key else None
+        if selected_entity:
+            st.markdown(f"**Nodo seleccionado:** `{selected_entity.type}` · {selected_entity.value}")
+            options = available_transforms(selected_entity)
+            if options:
+                chosen = st.selectbox("Transformación", options, format_func=lambda t: f"{t.name} — {t.description}")
+                if st.button("▶️ Ejecutar transformación"):
+                    res = run_transform(chosen.name, selected_entity, entity_graph,
+                                        {"cases": st.session_state.cases})
+                    if res["status"] == "ok":
+                        st.success(f"{res['added']} entidades nuevas.")
+                        st.rerun()
+                    else:
+                        st.error(res["error"])
+            else:
+                st.info("No hay transformaciones disponibles para este tipo.")
+        else:
+            st.caption("Haz clic en un nodo para ejecutar transformaciones.")
+
+        col_s, col_r = st.columns(2)
+        if col_s.button("💾 Guardar grafo"):
+            st.success("Grafo guardado.") if save_graph(selected_option, entity_graph) else st.error("No se pudo guardar.")
+        if col_r.button("↩️ Reiniciar desde el caso"):
+            graphs[selected_option] = case_to_graph(selected_option, case_data)
+            st.rerun()
 
     with tab3:
         st.subheader("🔔 Sistema Móvil de Alertas Vía Telegram")

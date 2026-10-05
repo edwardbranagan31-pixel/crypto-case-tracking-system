@@ -83,6 +83,25 @@ class EntityGraph:
             "links": [{"source": list(l.source), "target": list(l.target), "label": l.label} for l in self.links],
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EntityGraph":
+        graph = cls()
+        for item in data.get("entities", []):
+            try:
+                graph.add(Entity(item["type"], item["value"], dict(item.get("properties") or {}),
+                                 item.get("source", "manual"),
+                                 item.get("timestamp") or datetime.now(timezone.utc).isoformat()))
+            except (KeyError, ValueError, TypeError):
+                continue
+        for item in data.get("links", []):
+            try:
+                source, target = tuple(item["source"]), tuple(item["target"])
+            except (KeyError, TypeError):
+                continue
+            if source in graph.entities and target in graph.entities:
+                graph.links.append(Link(source, target, item.get("label", "")))
+        return graph
+
 
 def case_to_graph(case_id: str, case: Dict[str, Any]) -> EntityGraph:
     """Read-only migration of a case record into the entity model (cases.json is unchanged)."""
