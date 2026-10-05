@@ -29,6 +29,8 @@ from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
 from modules.search_engine import search_all
+from modules import saas
+from pathlib import Path
 
 # -----------------------------------------------------------------------------
 # CARGA DE VARIABLES DE ENTORNO
@@ -42,7 +44,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-if is_auth_enabled():
+SAAS = saas.is_saas_enabled()
+IDENT = None
+CAN_WRITE = True
+if SAAS:
+    IDENT = saas.saas_login(st)
+    CAN_WRITE = saas.can_write(IDENT["role"])
+    saas.saas_sidebar(st, IDENT)
+elif is_auth_enabled():
     require_login()
     auth_sidebar_status()
 
@@ -57,6 +66,30 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 CASES_FILE = os.getenv(
     "CASES_FILE", os.path.join(os.path.dirname(__file__), "cases.json")
 )
+
+def persist_cases():
+    if SAAS:
+        return saas.save_tenant_cases(IDENT["tenant_id"], st.session_state.cases)
+    return save_cases_to_json(CASES_FILE, st.session_state.cases)
+
+
+def audit_path():
+    return saas.tenant_dir(IDENT["tenant_id"]) / "audit_log.jsonl" if SAAS else None
+
+
+def graph_base():
+    return saas.tenant_dir(IDENT["tenant_id"]) / "graphs" if SAAS else None
+
+
+def meter(metric):
+    """Count a metered action against the tenant plan; always allowed outside SaaS mode."""
+    if not SAAS:
+        return True
+    if saas.consume(IDENT["tenant_id"], metric):
+        return True
+    st.error("Límite mensual del plan alcanzado. Actualiza tu plan para continuar.")
+    return False
+
 
 # -----------------------------------------------------------------------------
 # TELEGRAM
@@ -83,6 +116,8 @@ def send_telegram_alert(message):
 # -----------------------------------------------------------------------------
 # CASOS PREDETERMINADOS
 # -----------------------------------------------------------------------------
+if "cases" not in st.session_state and SAAS:
+    st.session_state.cases = saas.load_tenant_cases(IDENT["tenant_id"])
 if "cases" not in st.session_state:
     st.session_state.cases = load_cases_from_json(CASES_FILE) or {
         "NC-JOHNSTON-2024-3912": {
@@ -146,7 +181,7 @@ if search_query.strip():
 
 st.sidebar.markdown("### 📡 Estado del Sistema")
 neo4j_driver = None
-if NEO4J_URI and NEO4J_PASSWORD:
+if NEO4J_URI and NEO4J_PASSWORD and not SAAS:
     neo4j_driver = create_neo4j_driver(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     if neo4j_driver is None:
         st.sidebar.warning("Neo4j no conectado.")
@@ -161,6 +196,9 @@ st.sidebar.markdown("---")
 # CREAR NUEVO CASO
 # -----------------------------------------------------------------------------
 if selected_option == "+ Crear Nuevo Caso":
+    if not CAN_WRITE:
+        st.error("Tu rol (viewer) no permite crear casos.")
+        st.stop()
     st.title("➕ Registrar Nuevo Caso de Robo Cripto")
     st.markdown("Ingresa los datos iniciales para iniciar el rastreo e integrar el expediente al sistema.")
 
@@ -187,6 +225,8 @@ if selected_option == "+ Crear Nuevo Caso":
         case_id_error = validate_case_id(normalized_case_id, st.session_state.cases)
         if case_id_error:
             st.error(case_id_error)
+        elif SAAS and not saas.can_add_case(IDENT["tenant_id"], len(st.session_state.cases)):
+            st.error("Límite de casos del plan alcanzado. Actualiza tu plan.")
         elif bool(new_cex_exchange.strip()) != bool(new_cex_address.strip()):
             st.error("Indica tanto el exchange como su dirección CEX.")
         else:
@@ -221,7 +261,7 @@ if selected_option == "+ Crear Nuevo Caso":
                 "cex_endpoints": cex_endpoints,
             }
             st.session_state.cases[normalized_case_id] = new_case
-            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+            saved = persist_cases()
             if neo4j_driver:
                 sync_result = sync_case_to_neo4j(
                     neo4j_driver, normalized_case_id, new_case
@@ -256,12 +296,12 @@ else:
     # Botones de acción
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("💾 Guardar expediente"):
-            saved = save_cases_to_json(CASES_FILE, st.session_state.cases)
+        if st.button("💾 Guardar expediente", disabled=not CAN_WRITE):
+            saved = persist_cases()
             if saved:
-                st.success(f"Expediente guardado en {CASES_FILE}.")
+                st.success("Expediente guardado.")
             else:
-                st.error(f"No se pudo guardar el expediente en {CASES_FILE}.")
+                st.error("No se pudo guardar el expediente.")
     with col_btn2:
         if st.button("🧪 Probar Alerta Telegram"):
             message = (
@@ -342,7 +382,7 @@ else:
             ),
         )
         saved_check = st.session_state.get("onchain_check", {})
-        if st.button("🔄 Consultar todas las direcciones", key="check_onchain"):
+        if st.button("🔄 Consultar todas las direcciones", key="check_onchain") and meter("onchain"):
             with st.spinner("Consultando exploradores de bloques..."):
                 results = check_case_addresses(
                     case_data.get("wallets", {}),
@@ -398,7 +438,7 @@ else:
 
         graphs = st.session_state.setdefault("entity_graphs", {})
         if selected_option not in graphs:
-            graphs[selected_option] = load_graph(selected_option) or case_to_graph(selected_option, case_data)
+            graphs[selected_option] = load_graph(selected_option, graph_base()) or case_to_graph(selected_option, case_data)
         entity_graph = graphs[selected_option]
 
         col_f, col_l = st.columns(2)
@@ -418,12 +458,15 @@ else:
             st.markdown(f"**Nodo seleccionado:** `{selected_entity.type}` · {selected_entity.value}")
             options = available_transforms(selected_entity)
             if options:
-                chosen = st.selectbox("Transformación", options, format_func=lambda t: f"{t.name} — {t.description}")
-                if st.button("▶️ Ejecutar transformación"):
+                by_name = {t.name: t for t in options}
+                chosen_name = st.selectbox("Transformación", list(by_name),
+                                           format_func=lambda n: f"{n} — {by_name[n].description}")
+                chosen = by_name[chosen_name]
+                if st.button("▶️ Ejecutar transformación", disabled=not CAN_WRITE) and meter("transforms"):
                     res = run_transform(chosen.name, selected_entity, entity_graph,
                                         {"cases": st.session_state.cases})
                     record_audit(st.session_state.get("auth_user", ""), f"transform:{chosen.name}",
-                                 selected_option, f"{selected_entity.type}:{selected_entity.value} -> {res['status']}")
+                                 selected_option, f"{selected_entity.type}:{selected_entity.value} -> {res['status']}", audit_path())
                     if res["status"] == "ok":
                         st.success(f"{res['added']} entidades nuevas.")
                         st.rerun()
@@ -437,11 +480,11 @@ else:
         if selected_entity:
             compatible = {n: m for n, m in MACHINES.items()}
             machine_name = st.selectbox("Machine", list(compatible), format_func=lambda n: f"{n} — {compatible[n].description}")
-            if st.button("⚙️ Ejecutar machine sobre el nodo"):
+            if st.button("⚙️ Ejecutar machine sobre el nodo", disabled=not CAN_WRITE) and meter("transforms"):
                 with st.spinner("Ejecutando machine..."):
                     res = run_machine(machine_name, selected_entity, entity_graph, {"cases": st.session_state.cases})
                 record_audit(st.session_state.get("auth_user", ""), f"machine:{machine_name}", selected_option,
-                             f"{selected_entity.type}:{selected_entity.value} -> +{res['added']}")
+                             f"{selected_entity.type}:{selected_entity.value} -> +{res['added']}", audit_path())
                 st.session_state["machine_result"] = res
                 st.rerun()
         if st.session_state.get("machine_result"):
@@ -477,9 +520,9 @@ else:
                 st.caption("Sin transacciones con fecha. Ejecuta address_to_transactions.")
 
         col_s, col_r = st.columns(2)
-        if col_s.button("💾 Guardar grafo"):
-            if save_graph(selected_option, entity_graph):
-                record_audit(st.session_state.get("auth_user", ""), "save_graph", selected_option)
+        if col_s.button("💾 Guardar grafo", disabled=not CAN_WRITE):
+            if save_graph(selected_option, entity_graph, graph_base()):
+                record_audit(st.session_state.get("auth_user", ""), "save_graph", selected_option, "", audit_path())
                 st.success("Grafo guardado.")
             else:
                 st.error("No se pudo guardar.")
@@ -494,13 +537,13 @@ else:
         col_c.download_button("📥 PDF", graph_to_pdf(selected_option, entity_graph), f"grafo_{selected_option}.pdf", "application/pdf")
         if col_d.button("🔄 Grafo a Neo4j"):
             res = sync_graph_to_neo4j(neo4j_driver, selected_option, entity_graph)
-            record_audit(st.session_state.get("auth_user", ""), "neo4j_graph_sync", selected_option, res["status"])
+            record_audit(st.session_state.get("auth_user", ""), "neo4j_graph_sync", selected_option, res["status"], audit_path())
             if res["status"] != "error":
                 st.info(f"Neo4j: {res['status']}")
             else:
                 st.error(res["error"])
         with st.expander("Registro de auditoría"):
-            for entry in reversed(read_audit(selected_option)[-50:]):
+            for entry in reversed(read_audit(selected_option, audit_path())[-50:]):
                 st.caption(f"{entry['timestamp']} · {entry['user']} · {entry['action']} · {entry['detail']}")
 
     with tab3:
