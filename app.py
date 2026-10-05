@@ -16,6 +16,7 @@ from modules.neo4j_integration import (
     get_neo4j_driver as create_neo4j_driver,
     sync_case_to_neo4j,
 )
+from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
 from modules.search_engine import search_all
@@ -281,11 +282,12 @@ else:
 
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Evidencias & Transacciones",
         "🕸️ Grafo de Flujo On-Chain",
         "🔔 Alertas en Tiempo Real",
         "📄 Expediente para Autoridades",
+        "🔗 Casos Vinculados",
     ])
 
     with tab1:
@@ -441,6 +443,19 @@ else:
             file_name=f"Expediente_{selected_option}.json",
             mime="application/json",
         )
+
+    with tab5:
+        st.subheader("🔗 Análisis de Vínculos entre Casos")
+        st.caption("Pivote por direcciones compartidas (wallets y endpoints CEX) con otros casos; son pistas, no prueba.")
+        linked = find_linked_cases(st.session_state.cases, selected_option)
+        if linked:
+            st.graphviz_chart(build_link_graph(st.session_state.cases, selected_option))
+            for link in linked:
+                st.markdown(f"**{link['case_id']}** · {link['title']} — {link['link_strength']} entidad(es) compartida(s)")
+                for ent in link["shared_entities"]:
+                    st.caption(f"{ent['label']} · {ent['address']}")
+        else:
+            st.info("No se encontraron direcciones compartidas con otros casos.")
 
 # Footer
 st.markdown("<hr>", unsafe_allow_html=True)
