@@ -3,6 +3,7 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
+from streamlit_agraph import Config, Edge, Node, agraph
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
 from modules.alert_history import add_alert_history, get_case_alerts
@@ -16,6 +17,15 @@ from modules.neo4j_integration import (
     get_neo4j_driver as create_neo4j_driver,
     sync_case_to_neo4j,
 )
+from modules.entities import ENTITY_TYPES, case_to_graph
+from modules.graph_canvas import LAYOUTS, graph_to_canvas, load_graph, parse_node_id, save_graph
+from modules.transforms import available_transforms, run_transform
+from modules.collaboration import (can_access_case, graph_to_csv, graph_to_json, graph_to_pdf,
+                                   read_audit, record_audit, sync_graph_to_neo4j)
+from modules.analysis import (clusters, combined_risk, find_hubs, find_mixer_candidates,
+                              transaction_timeline)
+from modules.machines import MACHINES, run_machine
+from modules.link_analysis import build_link_graph, find_linked_cases
 from modules.onchain import check_case_addresses
 from modules.risk_scoring import compute_risk_score, get_risk_label
 from modules.search_engine import search_all
@@ -236,6 +246,9 @@ if selected_option == "+ Crear Nuevo Caso":
 
 else:
     case_data = st.session_state.cases[selected_option]
+    if not can_access_case(st.session_state.get("auth_user", ""), case_data, is_auth_enabled()):
+        st.error("No tienes acceso a este caso.")
+        st.stop()
     st.title(f"🔍 {case_data['title']}")
     st.caption(f"Víctima: {case_data['victim']} | Referencia Policial: {case_data['police_report']}")
     risk_score = compute_risk_score(case_data)
@@ -281,11 +294,12 @@ else:
 
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Evidencias & Transacciones",
         "🕸️ Grafo de Flujo On-Chain",
         "🔔 Alertas en Tiempo Real",
         "📄 Expediente para Autoridades",
+        "🔗 Casos Vinculados",
     ])
 
     with tab1:
@@ -379,7 +393,115 @@ else:
     with tab2:
         st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
         st.caption("Diagrama de wallets y endpoints registrados; no representa transacciones verificadas.")
-        st.graphviz_chart(build_case_graph(case_data))
+        with st.expander("Diagrama estático (Graphviz)"):
+            st.graphviz_chart(build_case_graph(case_data))
+
+        graphs = st.session_state.setdefault("entity_graphs", {})
+        if selected_option not in graphs:
+            graphs[selected_option] = load_graph(selected_option) or case_to_graph(selected_option, case_data)
+        entity_graph = graphs[selected_option]
+
+        col_f, col_l = st.columns(2)
+        visible = col_f.multiselect("Filtrar por tipo", ENTITY_TYPES, default=list(ENTITY_TYPES))
+        layout = col_l.selectbox("Disposición", LAYOUTS)
+        canvas = graph_to_canvas(entity_graph, visible)
+        a_nodes = [Node(id=n["id"], label=n["label"], color=n["color"], title=n["title"], size=20)
+                   for n in canvas["nodes"]]
+        a_edges = [Edge(source=e["source"], target=e["target"], label=e["label"]) for e in canvas["edges"]]
+        a_config = Config(width=900, height=500, directed=True,
+                          hierarchical=layout == "hierarchical", physics=layout != "hierarchical")
+        clicked = agraph(nodes=a_nodes, edges=a_edges, config=a_config)
+
+        key = parse_node_id(clicked) if clicked else None
+        selected_entity = entity_graph.entities.get(key) if key else None
+        if selected_entity:
+            st.markdown(f"**Nodo seleccionado:** `{selected_entity.type}` · {selected_entity.value}")
+            options = available_transforms(selected_entity)
+            if options:
+                chosen = st.selectbox("Transformación", options, format_func=lambda t: f"{t.name} — {t.description}")
+                if st.button("▶️ Ejecutar transformación"):
+                    res = run_transform(chosen.name, selected_entity, entity_graph,
+                                        {"cases": st.session_state.cases})
+                    record_audit(st.session_state.get("auth_user", ""), f"transform:{chosen.name}",
+                                 selected_option, f"{selected_entity.type}:{selected_entity.value} -> {res['status']}")
+                    if res["status"] == "ok":
+                        st.success(f"{res['added']} entidades nuevas.")
+                        st.rerun()
+                    else:
+                        st.error(res["error"])
+            else:
+                st.info("No hay transformaciones disponibles para este tipo.")
+        else:
+            st.caption("Haz clic en un nodo para ejecutar transformaciones.")
+
+        if selected_entity:
+            compatible = {n: m for n, m in MACHINES.items()}
+            machine_name = st.selectbox("Machine", list(compatible), format_func=lambda n: f"{n} — {compatible[n].description}")
+            if st.button("⚙️ Ejecutar machine sobre el nodo"):
+                with st.spinner("Ejecutando machine..."):
+                    res = run_machine(machine_name, selected_entity, entity_graph, {"cases": st.session_state.cases})
+                record_audit(st.session_state.get("auth_user", ""), f"machine:{machine_name}", selected_option,
+                             f"{selected_entity.type}:{selected_entity.value} -> +{res['added']}")
+                st.session_state["machine_result"] = res
+                st.rerun()
+        if st.session_state.get("machine_result"):
+            res = st.session_state.pop("machine_result")
+            st.success(f"Machine: {res['added']} entidades nuevas, {res.get('flagged', 0)} marcadas como exchange.")
+            for err in res["errors"]:
+                st.warning(err)
+
+        with st.expander("📈 Análisis del grafo"):
+            graph_risk = combined_risk(risk_score, entity_graph)
+            st.metric("Riesgo combinado (caso + grafo)", f"{graph_risk['score']}/100", f"+{graph_risk['points']}")
+            for finding in graph_risk["findings"]:
+                st.caption(f"• {finding}")
+            hubs = find_hubs(entity_graph)
+            st.markdown("**Hubs**")
+            if hubs:
+                st.dataframe(pd.DataFrame(hubs))
+            else:
+                st.caption("Sin hubs detectados.")
+            mixers = find_mixer_candidates(entity_graph)
+            st.markdown("**Posibles mixers / agregadores (heurística, no prueba)**")
+            if mixers:
+                st.dataframe(pd.DataFrame(mixers))
+            else:
+                st.caption("Sin candidatos.")
+            comps = clusters(entity_graph)
+            st.markdown(f"**Clusters:** {len(comps)} (el mayor con {len(comps[0]) if comps else 0} entidades)")
+            timeline = transaction_timeline(entity_graph)
+            st.markdown("**Línea de tiempo de transacciones**")
+            if timeline:
+                st.dataframe(pd.DataFrame(timeline))
+            else:
+                st.caption("Sin transacciones con fecha. Ejecuta address_to_transactions.")
+
+        col_s, col_r = st.columns(2)
+        if col_s.button("💾 Guardar grafo"):
+            if save_graph(selected_option, entity_graph):
+                record_audit(st.session_state.get("auth_user", ""), "save_graph", selected_option)
+                st.success("Grafo guardado.")
+            else:
+                st.error("No se pudo guardar.")
+        if col_r.button("↩️ Reiniciar desde el caso"):
+            graphs[selected_option] = case_to_graph(selected_option, case_data)
+            st.rerun()
+
+        st.markdown("#### Exportar y colaborar")
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.download_button("📥 CSV", graph_to_csv(entity_graph), f"grafo_{selected_option}.csv", "text/csv")
+        col_b.download_button("📥 JSON", graph_to_json(entity_graph), f"grafo_{selected_option}.json", "application/json")
+        col_c.download_button("📥 PDF", graph_to_pdf(selected_option, entity_graph), f"grafo_{selected_option}.pdf", "application/pdf")
+        if col_d.button("🔄 Grafo a Neo4j"):
+            res = sync_graph_to_neo4j(neo4j_driver, selected_option, entity_graph)
+            record_audit(st.session_state.get("auth_user", ""), "neo4j_graph_sync", selected_option, res["status"])
+            if res["status"] != "error":
+                st.info(f"Neo4j: {res['status']}")
+            else:
+                st.error(res["error"])
+        with st.expander("Registro de auditoría"):
+            for entry in reversed(read_audit(selected_option)[-50:]):
+                st.caption(f"{entry['timestamp']} · {entry['user']} · {entry['action']} · {entry['detail']}")
 
     with tab3:
         st.subheader("🔔 Sistema Móvil de Alertas Vía Telegram")
@@ -429,6 +551,8 @@ else:
             "fiat_wire_evidence": case_data["fiat_wire"],
             "monitored_wallets": case_data["wallets"],
             "target_cex_accounts": case_data["cex_endpoints"],
+            "entity_graph": (st.session_state.get("entity_graphs", {}).get(selected_option)
+                             or case_to_graph(selected_option, case_data)).to_dict(),
             "legal_request": "SOLICITUD FORMAL DE CONGELAMIENTO PREVENTIVO Y REGISTROS KYC/IP",
         }
 
@@ -441,6 +565,19 @@ else:
             file_name=f"Expediente_{selected_option}.json",
             mime="application/json",
         )
+
+    with tab5:
+        st.subheader("🔗 Análisis de Vínculos entre Casos")
+        st.caption("Pivote por direcciones compartidas (wallets y endpoints CEX) con otros casos; son pistas, no prueba.")
+        linked = find_linked_cases(st.session_state.cases, selected_option)
+        if linked:
+            st.graphviz_chart(build_link_graph(st.session_state.cases, selected_option))
+            for link in linked:
+                st.markdown(f"**{link['case_id']}** · {link['title']} — {link['link_strength']} entidad(es) compartida(s)")
+                for ent in link["shared_entities"]:
+                    st.caption(f"{ent['label']} · {ent['address']}")
+        else:
+            st.info("No se encontraron direcciones compartidas con otros casos.")
 
 # Footer
 st.markdown("<hr>", unsafe_allow_html=True)
