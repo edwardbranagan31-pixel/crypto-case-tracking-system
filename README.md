@@ -27,6 +27,14 @@ streamlit run app.py
 
 Open <http://localhost:8501>. The application seeds an example case on first run and saves newly created cases in `cases.json`. The file is ignored by Git. Set `CASES_FILE` to a durable mounted path when deploying to an environment with ephemeral filesystems.
 
+## Link analysis (Maltego-style)
+
+- `modules/entities.py`: typed entities (wallet, exchange, transaction, person, domain, url, email, phone, case) with normalized values, properties, source and timestamp. `case_to_graph` reads existing case records without changing `cases.json`.
+- `modules/transforms.py`: transform registry. Each transform maps an entity to linked entities, with rate limiting and error handling; disable by name via `TRANSFORMS_DISABLED=name1,name2`. Built-ins: address to transactions, address to EVM tokens, address/exchange to cases, exchange to deposit addresses, domain to DNS/RDAP. Add new ones with the `@register` decorator.
+- "Casos Vinculados" tab: cases sharing addresses.
+
+Not yet implemented: interactive graph canvas, machines, graph analysis, Neo4j graph persistence, per-user audit and PDF/CSV export.
+
 ## Configuration
 
 Set only the integrations you plan to use in `.env` or the deployment environment:
