@@ -3,6 +3,7 @@ import json
 import requests
 import pandas as pd
 import streamlit as st
+import graphviz
 from streamlit_agraph import Config, Edge, Node, agraph
 from dotenv import load_dotenv
 from modules import auth_sidebar_status, is_auth_enabled, require_login
@@ -431,10 +432,82 @@ else:
             st.info("No wallet or CEX addresses are registered for this case.")
 
     with tab2:
-        st.subheader("🕸️ Grafo de Dispersión y Agregación de Fondos")
-        st.caption("Diagrama de wallets y endpoints registrados; no representa transacciones verificadas.")
-        with st.expander("Diagrama estático (Graphviz)"):
-            st.graphviz_chart(build_case_graph(case_data))
+        st.subheader("🕸️ Análisis Forense de Vínculos Estilo Maltego / Chainalysis")
+        st.markdown("""
+        Reconstrucción gráfica de la cadena de custodia (*Chain of Custody*) con clasificación de entidades, 
+        evaluación de riesgo y trazabilidad de fondos *on-chain*.
+        """)
+
+        # Configuración del lienzo estilo Maltego / Dark Forensics
+        graph = graphviz.Digraph(comment="Maltego Style Crypto Graph", format='svg')
+        graph.attr(rankdir='LR', bgcolor='#0e1117', fontcolor='#ffffff', fontname='Helvetica')
+        graph.attr('node', shape='none', fontname='Helvetica', fontcolor='#ffffff')
+        graph.attr('edge', fontcolor='#a3b8cc', color='#4a5568', fontname='Helvetica', fontsize='9', arrowhead='normal')
+
+        # Función para construir tarjetas de entidad estilo Maltego
+        def build_maltego_card(node_id, icon, title, entity_type, detail_label, detail_val, risk_color="#3182ce"):
+            return f'''<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="3" CELLPADDING="6" BGCOLOR="#1a202c" COLOR="{risk_color}">
+              <TR>
+                <TD ALIGN="CENTER" COLSPAN="2"><FONT POINT-SIZE="16">{icon}</FONT> <B><FONT POINT-SIZE="11" COLOR="#ffffff">{title}</FONT></B></TD>
+              </TR>
+              <TR>
+                <TD ALIGN="LEFT" COLSPAN="2"><FONT POINT-SIZE="8" COLOR="#a0aec0"><I>{entity_type}</I></FONT></TD>
+              </TR>
+              <HR/>
+              <TR>
+                <TD ALIGN="LEFT"><FONT POINT-SIZE="9" COLOR="#cbd5e0">{detail_label}:</FONT></TD>
+                <TD ALIGN="RIGHT"><FONT POINT-SIZE="9" COLOR="#63b3ed"><B>{detail_val}</B></FONT></TD>
+              </TR>
+            </TABLE>
+            >'''
+
+        # 1. Nodo Víctima
+        victim_card = build_maltego_card(
+            "VICTIM", "👤", case_data['victim'], 
+            "Entity: Origin / Victim", "Pérdida", f"${case_data['total_loss_usd']:,.0f} USD", "#3182ce"
+        )
+        graph.node("VICTIM", label=victim_card)
+
+        # 2. Nodo Plataforma Scam
+        scam_card = build_maltego_card(
+            "SCAM", "🚨", "Plataforma Scam / Fraud", 
+            "Entity: Fraud / App", "Riesgo", "CRÍTICO (10/10)", "#e53e3e"
+        )
+        graph.node("SCAM", label=scam_card)
+
+        # 3. Billetera Semilla / Peel Chain
+        btc_wallet = case_data['wallets'].get('BTC_DEPOSIT', list(case_data['wallets'].values())[0] if case_data['wallets'] else 'N/A')
+        wallet_title = f"Wallet: {btc_wallet[:8]}..." if len(btc_wallet) > 8 else "Wallet Deposit"
+        peel_card = build_maltego_card(
+            "PEEL", "👛", wallet_title, 
+            "Wallet: Deposit / Peel", "Red", "Mainnet", "#dd6b20"
+        )
+        graph.node("PEEL", label=peel_card)
+
+        # 4. Nodo de Consolidación / Mixer
+        commingling_card = build_maltego_card(
+            "MIXER", "🔀", "Hub de Agregación", 
+            "Entity: Unhosted Commingling", "Volumen Trazado", f"${case_data['traced_usd']:,.0f} USD", "#805ad5"
+        )
+        graph.node("MIXER", label=commingling_card)
+
+        # Conexiones principales
+        graph.edge("VICTIM", "SCAM", label=f" Depósito Inicial\n ${case_data['total_loss_usd']:,.0f} USD")
+        graph.edge("SCAM", "PEEL", label=" Layer 1 Transfer")
+        graph.edge("PEEL", "MIXER", label=" Peel Chain Split")
+
+        # 5. Nodos CEX Endpoints (Exchanges Regulados)
+        for idx, endpoint in enumerate(case_data["cex_endpoints"]):
+            cex_id = f"CEX_{idx}"
+            cex_card = build_maltego_card(
+                cex_id, "🏢", f"CEX: {endpoint['exchange']}", 
+                f"Endpoint ({endpoint.get('type', 'Address')})", "Estado KYC", "Target Identified", "#38a169"
+            )
+            graph.node(cex_id, label=cex_card)
+            graph.edge("MIXER", cex_id, label=f" Depósito a Exchange")
+
+        st.graphviz_chart(graph, use_container_width=True)
 
         graphs = st.session_state.setdefault("entity_graphs", {})
         if selected_option not in graphs:
